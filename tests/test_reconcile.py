@@ -1,6 +1,23 @@
 """reconcile_records の照合ロジック。決定論的(モデル不要)・合成レコードで検証。"""
 
-from noveletary.reconcile import reconcile_records
+from noveletary.reconcile import reconcile_records, triage_candidates
+
+
+def test_triage_candidates_signal_and_dedup():
+    # 記帳下書きの仕分け: 状態/既知実体=high, 瑣末行為=low, 既出(alias経由)=dedup
+    existing = [{"subject": "イオ・チェン", "value": "補修潜水士", "attribute": "STATE"}]
+    aliases = {"イオ": "イオ・チェン"}
+    cands = [
+        {"subject": "イオ", "attribute": "STATE", "value": "補修潜水士", "kind": "STATE"},  # 既出(alias)
+        {"subject": "艦長の名", "attribute": "STATE", "value": "ネモ", "kind": "STATE"},  # 新規・状態
+        {"subject": "磁気圏", "attribute": "ACT", "value": "かける:死", "kind": "EVENT"},  # 新規・行為・未知主語
+        {"subject": "イオ", "attribute": "ACT", "value": "向かう:係留区", "kind": "EVENT"},  # 新規・行為・既知主語
+    ]
+    r = triage_candidates(cands, existing, aliases)
+    assert {c["value"] for c in r["high_new"]} == {"ネモ", "向かう:係留区"}
+    assert {c["value"] for c in r["low_new"]} == {"かける:死"}
+    assert {c["value"] for c in r["existing"]} == {"補修潜水士"}
+    assert r["summary"] == {"high_new": 2, "low_new": 1, "existing": 1}
 
 
 def _recs():

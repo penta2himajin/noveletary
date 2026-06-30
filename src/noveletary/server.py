@@ -418,6 +418,24 @@ def ensure_nlp(verbose: bool = True) -> bool:
     return ok
 
 
+@mcp.tool()
+def propose_canon_facts(branch: str, chapter_text: str, chapter: int, pov_character: str = None) -> dict:
+    """章の散文から記帳の下書きを生成する(記帳自動化)。機構抽出(KWJA優先/GiNZA退避)→正準スキーマへ写像
+    →既存カノンと差分→採否しやすく仕分けて返す。**コミットしない**(候補)。
+    返り値: high_new(状態/既知実体の行為=採用候補) / low_new(未知主語の瑣末行為=要確認) / existing(既出=除外) / summary。
+    使い方: high_new を確認・取捨して add_facts(atomic) で確定。本文を書いた直後に呼べば記帳の二重労働が消える。
+    注: 値は複合名詞句を復元済みだが物語型(LIFE/RANK等)には畳まないので、必要なら採用後に retag_fact で精緻化する。"""
+    from .kwja_extract import records_to_facts
+    from .reconcile import triage_candidates
+
+    recs = _build_records(chapter_text, chapter, pov_character)["records"]
+    candidates = records_to_facts(recs)
+    st = store.get_state(branch)
+    out = triage_candidates(candidates, st["facts"], st.get("aliases"))
+    out["chapter"] = chapter
+    return out
+
+
 def main():
     ensure_nlp()  # NLP抽出を標準に: 未導入なら起動時に自動セットアップ(NOVELETARY_NLP_AUTOSETUP=0 で無効化)
     mcp.run()  # stdio transport (Claude Code / Claude Desktop からローカル起動)

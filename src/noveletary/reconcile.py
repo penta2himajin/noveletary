@@ -20,6 +20,41 @@ def _norm(s):
     return re.sub(r"[。、\s（）()]", "", s or "")
 
 
+def triage_candidates(candidates, existing_facts, aliases=None):
+    """記帳の下書き候補(records_to_facts 出力)を、採否しやすいよう仕分ける。NLP非依存の純ロジック。
+    candidates: [{subject, attribute, value, kind, ...}] / existing_facts: get_state の facts / aliases: 別名表。
+    - existing : 既にカノンにある(canon主語×値でdedup)→提示のみ
+    - high_new : 新規かつ高シグナル(状態=判定詞由来 STATE、または主語が既知実体の行為)→採用候補
+    - low_new  : 新規だが低シグナル(未知主語の瑣末な行為)→要確認
+    機構抽出は不完全なので確定でなく候補。high_new を中心に採否し add_facts で確定する。"""
+    aliases = aliases or {}
+
+    def canon(s):
+        return aliases.get(s, s)
+
+    known = {canon(f["subject"]) for f in existing_facts}
+    existing_pairs = {(canon(f["subject"]), _norm(f.get("value"))) for f in existing_facts}
+    high_new, low_new, existing_hits = [], [], []
+    for c in candidates:
+        cs = canon(c.get("subject"))
+        is_new = (cs, _norm(c.get("value"))) not in existing_pairs
+        signal = "high" if (c.get("kind") == "STATE" or cs in known) else "low"
+        item = {**c, "signal": signal, "is_new": is_new}
+        if not is_new:
+            existing_hits.append(item)
+        elif signal == "high":
+            high_new.append(item)
+        else:
+            low_new.append(item)
+    return {
+        "high_new": high_new,
+        "low_new": low_new,
+        "existing": existing_hits,
+        "summary": {"high_new": len(high_new), "low_new": len(low_new), "existing": len(existing_hits)},
+        "note": "high_new(状態/既知実体)を中心に採否し add_facts へ。low_new は瑣末行為の疑い。確定でなく候補。",
+    }
+
+
 def reconcile_records(chapter, llm_facts, records, known_entities=None):
     """llm_facts: [{subject, predicate}] / records: extract_kwjaのrecords。
     known_entities(KBの既知実体)で対象を絞る=domain-shiftで壊れるNERに依存しない。"""
