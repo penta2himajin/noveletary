@@ -50,6 +50,23 @@ def _resolve_arg(arg, pov_character):
     return head, "直接"
 
 
+def _adjunct_cases(pred_bp, sent):
+    """述語の構文依存のうち、PASに出ない格助詞付き付加詞(へ/から/で/まで/に)を拾う。
+    方向(へ)・起点(から)・場所(で)等はPAS核項に入らないため、係り受けから補完する。"""
+    out = {}
+    want = {"へ": "ヘ", "から": "カラ", "で": "デ", "まで": "マデ", "に": "ニ"}
+    for bp in sent.base_phrases:
+        if bp.parent is None or bp.parent.index != pred_bp.index:
+            continue
+        # 末尾付近の格助詞を取得(連用の格マーカー)
+        particles = [m.text for m in bp.morphemes if m.pos == "助詞"]
+        for pt in particles:
+            if pt in want:
+                out[want[pt]] = bp.head.lemma
+                break
+    return out
+
+
 def _records_from_doc(doc, chapter, pov_character):
     out = []
     for sent in doc.sentences:
@@ -68,6 +85,9 @@ def _records_from_doc(doc, chapter, pov_character):
                 args[case] = val
                 if case == "ガ":
                     ga_subject, ga_zero = val, ztype
+            # PASに出ない格付加詞(方向へ/起点から/場所で等)を構文依存から補完
+            for case, val in _adjunct_cases(bp, sent).items():
+                args.setdefault(case, val)
             modality = "state" if "状態述語" in f else ("event" if "動態述語" in f else None)
             out.append(
                 {
@@ -153,10 +173,11 @@ def records_to_facts(records):
         if not r.get("subject"):
             continue
         is_state = r.get("modality") == "state"
-        ni = r.get("arguments", {}).get("ニ")
+        a = r.get("arguments", {})
+        loc = a.get("ニ") or a.get("ヘ")  # 着点(ニ) or 方向(ヘ)
         value = r["predicate"]
-        if ni and not str(ni).startswith("(外界"):
-            value = f"{r['predicate']}:{ni}"
+        if loc and not str(loc).startswith("(外界"):
+            value = f"{r['predicate']}:{loc}"
         facts.append(
             {
                 "subject": r["subject"],
