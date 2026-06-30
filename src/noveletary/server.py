@@ -192,28 +192,53 @@ def answer_question(qid: int, answer: str) -> dict:
 
 
 # ===================== 散文→事実 抽出/照合 =====================
+def _build_records(chapter_text, chapter, pov_character=None):
+    """KWJA(ゼロ照応解決済み)優先、無ければGiNZA(degraded)で述語-項レコードを作る。"""
+    try:
+        from .kwja_extract import extract_kwja
+
+        return extract_kwja(chapter_text, chapter, pov_character=pov_character)
+    except Exception:
+        from .extract import ginza_records
+
+        return ginza_records(chapter_text, chapter, pov_character=pov_character)
+
+
 @mcp.tool()
-def extract_facts(chapter_text: str, chapter: int) -> dict:
-    """章の散文から事実候補を機構が独立に抽出する(決定論的NLP)。
-    LLM自身の読み取りと突き合わせる第二の観測。抽出は不完全(ゼロ主語等で取りこぼす)なので
-    authoritativeではなく候補。各候補に provenance(典拠文)が付く。
-    通常は extract_facts でなく reconcile_facts を使い、LLMの抽出との差分を見るとよい。"""
-    from .extract import extract
-
-    return extract(chapter_text, chapter)
+def extract_facts(chapter_text: str, chapter: int, pov_character: str = None) -> dict:
+    """章の散文から述語-項レコードを機構が独立に抽出する(KWJA優先/GiNZA退避)。
+    物語固有の属性に畳まず、subject(ゼロ照応解決済み)/predicate/modality(state|event)/
+    arguments(ガ/ヲ/ニ)/tense を汎用形で返す。LLMの読み取りと突き合わせる第二の観測。
+    抽出は不完全なのでauthoritativeでなく候補。通常は reconcile_facts で差分を見るとよい。
+    pov_character を渡すと語り手(著者)に解決された主語をそのキャラに割り当てる。"""
+    return _build_records(chapter_text, chapter, pov_character)
 
 
 @mcp.tool()
-def reconcile_facts(chapter: int, llm_facts: list, chapter_text: str) -> dict:
-    """LLMが章から抽出した事実(llm_facts)と、機構が同じ章テキストから独立抽出した候補を突き合わせる。
-    返り値: agreement(一致=確証) / llm_only_check_grounding(本文に根拠が薄い=捏造/過剰解釈の疑い) /
-    mechanism_only_possible_omission(本文にあるがLLM申告漏れの疑い)。
-    これにより文脈整合性を強制する=LLMの抽出の正誤を機構が再判断させる。差分は確定でなく要確認。
-    llm_facts は [{subject, attribute, value, chapter}, ...]。"""
-    from .extract import reconcile
+def reconcile_facts(chapter: int, llm_facts: list, chapter_text: str, pov_character: str = None) -> dict:
+    """LLMが章から抽出した事実(llm_facts)と、機構が独立抽出した述語-項レコードを(主語,述語)軸で突き合わせる。
+    llm_facts は [{subject, predicate}, ...]。
+    返り値: agreement(一致=確証) / llm_only_check_grounding(本文に根拠が薄い=捏造の疑い) /
+    mechanism_only_state_possible_omission(状態の申告漏れ・高シグナル) /
+    mechanism_only_event_possible_omission(行為の申告漏れ・死亡等を含む)。
+    既知実体(KB)で対象を絞り、ゼロ照応解決済みの主語のみ照合。差分は確定でなく要確認。"""
+    from .reconcile import reconcile_records
 
     known = [f["subject"] for f in store.get_state("main")["facts"]]
-    return reconcile(chapter, llm_facts, chapter_text, known_entities=known)
+    recs = _build_records(chapter_text, chapter, pov_character)["records"]
+    return reconcile_records(chapter, llm_facts, recs, known_entities=known)
+
+
+@mcp.tool()
+def import_extracted(branch: str, chapter_text: str, chapter: int, pov_character: str = None) -> dict:
+    """章の散文から機構抽出した述語-項レコードを、汎用マッピングでKBに取り込む(gateせず)。
+    state→STATE / event→ACT に畳み、述語をvalueにする。取込後 audit で矛盾を表面化できる。
+    物語固有の型付け(LIFE=dead等)が要る箇所は、取込後に作者が add_fact で精緻化する。"""
+    from .kwja_extract import records_to_facts
+
+    recs = _build_records(chapter_text, chapter, pov_character)["records"]
+    facts = records_to_facts(recs)
+    return store.import_facts(branch, facts)
 
 
 def main():
