@@ -59,6 +59,20 @@ def test_narrated_in_survives_snapshot(s):
     assert len(facts) == 30 and all(f["narrated_in"] == 7 for f in facts)
 
 
+def test_as_of_narrated_respects_snapshot(s):
+    # スナップショット以前のfactにも narrated スライスが効く(以前は素通りした)
+    for i in range(26):  # op25のスナップショットを跨がせる
+        s.add("main", f"E{i}", "STATE", "x", 1, narrated_in=9)
+    assert s.get_state("main", as_of_narrated=3)["facts"] == []  # 第3章読者には未開示
+
+
+def test_as_of_chapter_respects_snapshot(s):
+    # valid-time スライスもスナップショット復元factに効く(既存バグの回帰ガード)
+    for i in range(26):
+        s.add("main", f"L{i}", "STATE", "x", 50)  # valid-time=50
+    assert s.get_state("main", as_of_chapter=10)["facts"] == []  # 第10章時点には未だ無い
+
+
 def test_assert_alias_merges_unrelated_names(s):
     # 表層が似ていない別名(偽名)を作者が明示統合できる
     s.add("main", "マイケル・コール", "STATE", "相続人", 3)

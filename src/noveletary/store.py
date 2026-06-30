@@ -174,6 +174,13 @@ class Store:
             for fid, vals in snap["facts"].items():
                 s, a, v, t, k, nm = vals[:6]  # 旧snapshot(6要素)互換
                 ni = vals[6] if len(vals) > 6 else None  # narrated_in(7要素目)
+                # スナップショット復元factにも時間スライスを適用(delta replayと同一規準)
+                if as_of_valid is not None and t is not None and t > as_of_valid:
+                    continue
+                if as_of_narrated is not None:
+                    nn = ni if ni is not None else t
+                    if nn is not None and nn > as_of_narrated:
+                        continue
                 kb.facts[fid] = Fact(fid, s, a, v, t, k, nm, narrated_in=ni)
             kb.aliases = snap["aliases"]
             kb.cannot_link = {frozenset(x) for x in snap["cl"]}
