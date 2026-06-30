@@ -1,4 +1,4 @@
-"""抽出/照合(GiNZA依存)。NLP extra 未導入なら skip。"""
+"""GiNZA退避抽出 ginza_records のスキーマ確認。NLP extra 未導入なら skip。"""
 
 import pytest
 
@@ -14,13 +14,13 @@ def _has_ginza():
 
 
 @pytest.mark.skipif(not _has_ginza(), reason="ja_ginza not installed (pip install '.[nlp]')")
-def test_reconcile_buckets():
-    from noveletary.extract import reconcile
+def test_ginza_records_schema():
+    from noveletary.extract import ginza_records
 
-    text = "ハルは港へ向かった。"
-    llm_facts = [
-        {"subject": "ハル", "attribute": "LIFE", "value": "dead", "chapter": 2},  # 捏造
-    ]
-    r = reconcile(2, llm_facts, text, known_entities=["ハル"])
-    # 本文に死亡根拠が無い → llm_only(要根拠確認)へ
-    assert any(f["attribute"] == "LIFE" for f in r["llm_only_check_grounding"])
+    r = ginza_records("ハルは港へ向かった。", 2)
+    assert r["record_count"] >= 1
+    rec = r["records"][0]
+    # 汎用スキーマのキーが揃い、物語固有属性に畳まれていないこと
+    for k in ("subject", "predicate", "modality", "arguments", "zero_resolution"):
+        assert k in rec
+    assert rec["modality"] is None  # GiNZAは状態/動態を判定しない
