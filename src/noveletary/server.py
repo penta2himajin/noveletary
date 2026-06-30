@@ -129,12 +129,6 @@ def resolve_setup(branch: str, fid: str) -> dict:
 
 
 @mcp.tool()
-def open_setups(branch: str = "main", as_of_chapter: int = None) -> dict:
-    """未回収の伏線一覧。as_of_chapter を渡すと payoff_by 超過分を overdue=True で示す。"""
-    return {"branch": branch, "open_setups": store.open_setups(branch, as_of_chapter)}
-
-
-@mcp.tool()
 def get_log(branch: str = "main", limit: int = 50) -> dict:
     """ブランチの操作履歴(新しい順)。op_id はロールバック先の指定に使える。"""
     return {"branch": branch, "log": store.get_log(branch, limit)}
@@ -182,12 +176,6 @@ def add_facts(branch: str, facts: list, atomic: bool = False) -> dict:
 
 
 @mcp.tool()
-def update_fact(branch: str, fid: str, new_value: str, num: int = None) -> dict:
-    """既存事実を更新(supersession; 旧版は履歴に残る)。retcon検査が走り、過去版と矛盾すれば拒否。"""
-    return store.update(branch, fid, new_value, num)
-
-
-@mcp.tool()
 def retag_fact(
     branch: str,
     fid: str,
@@ -198,9 +186,9 @@ def retag_fact(
     value: str = None,
     num: int = None,
 ) -> dict:
-    """既存事実を同じ fid のまま付け替える(delete+re-add 不要)。指定しない項目(None)は据え置き。
-    用途: 章の移動(chapter)、属性の付け替え(attribute)、生前の経歴/居所を死で畳む(valid_to)、開示章の修正(narrated_in)。
-    retcon 同様に hard 再検査が走り、矛盾すれば status=rejected(retag) で適用しない。
+    """既存事実を同じ fid のまま付け替える/更新する(delete+re-add 不要)。指定しない項目(None)は据え置き。
+    用途: 値の更新(value/num)、章の移動(chapter)、属性の付け替え(attribute)、生前の経歴/居所を死で畳む(valid_to)、開示章の修正(narrated_in)。
+    retcon 同様に hard 再検査が走り、矛盾すれば status=rejected(retag) で適用しない(操作ログは不変なので過去版は履歴に残る)。
     注: valid_to/narrated_in を ∞/既定へ戻すのは不可(rare; delete_fact + add_fact で)。"""
     return store.retag(
         branch,
@@ -264,20 +252,13 @@ def list_open_questions(branch: str = None, status: str = "open") -> dict:
 
 
 @mcp.tool()
-def assert_alias(branch: str, alias: str, canonical: str) -> dict:
-    """2つの呼称を同一指示対象として明示統合する(別名)。alias を canonical の別名にする(canonicalが正準)。
-    表層が似ていなくても可——偽名・あだ名・正体判明など「実は同一人物」を一級事実にできる。
-    統合後はエンジンが両者を1実体として検査するので、正体レベルの矛盾(故人の行為など)も検出できる。
-    返り値に統合後の hard 監査結果(hard_violations)を含む。ALIAS質問への answer_question('同一') と等価だが、
-    質問を待たず作者が能動的に宣言できる。"""
-    return store.assert_alias(branch, alias, canonical)
-
-
-@mcp.tool()
-def assert_distinct(branch: str, a: str, b: str) -> dict:
-    """2つの呼称を別人(別指示対象)として明示固定する(cannot_link)。同姓の別人など。
-    以後この対で ALIAS 質問は出ず、自動別名統合もされない。answer_question('別物') と等価。"""
-    return store.assert_distinct(branch, a, b)
+def link_entities(branch: str, a: str, b: str, same: bool) -> dict:
+    """2つの呼称の同一性を作者が明示宣言する(ALIAS質問を待たず能動的に)。
+    same=True : a を b の別名として統合(bが正準)。偽名・あだ名・正体判明など「実は同一人物」を一級事実化。
+      統合後はエンジンが両者を1実体として検査するので正体レベルの矛盾(故人の行為など)も検出。hard_violations を返す。
+    same=False: a と b を別人(別指示対象)として固定(cannot_link)。同姓の別人など。以後この対で ALIAS 質問は出ない。
+    answer_question の '同一'/'別物' と等価。"""
+    return store.assert_alias(branch, a, b) if same else store.assert_distinct(branch, a, b)
 
 
 @mcp.tool()
@@ -310,36 +291,25 @@ def add_constraint(branch: str, template: str, params: dict, scope: dict = None,
 
 
 @mcp.tool()
-def disable_constraint(branch: str, cid: str) -> dict:
-    """制約を無効化する(削除せず一時停止。ロールバック/再有効化が可能)。"""
-    return store.set_constraint_enabled(branch, cid, False)
+def set_constraint(branch: str, cid: str, enabled: bool = None, remove: bool = False) -> dict:
+    """制約のライフサイクル操作を1つに集約。remove=True で削除(操作ログは不変なのでロールバックで復活/デフォルトも消せる)。
+    enabled=False で無効化(一時停止)、enabled=True で再有効化。両方指定時は remove を優先。"""
+    if remove:
+        return store.remove_constraint(branch, cid)
+    if enabled is None:
+        return {"error": "enabled(true/false) か remove=true のいずれかを指定してください"}
+    return store.set_constraint_enabled(branch, cid, enabled)
 
 
 @mcp.tool()
-def enable_constraint(branch: str, cid: str) -> dict:
-    """無効化した制約を再び有効化する。"""
-    return store.set_constraint_enabled(branch, cid, True)
-
-
-@mcp.tool()
-def remove_constraint(branch: str, cid: str) -> dict:
-    """制約を削除する。操作ログは不変なのでロールバックで復活できる。デフォルト制約も作者が消せる。"""
-    return store.remove_constraint(branch, cid)
-
-
-@mcp.tool()
-def check_constraints(branch: str = "main") -> dict:
+def check_constraints(branch: str = "main", eager: bool = None) -> dict:
     """制約セットの構造的な矛盾・無効設定を検査する(遅延/オンデマンド)。
     検出: contradictory_monotone(増減両立) / duplicate(重複) / orphan_release(対応forbid無し) /
-    shadowed_forbid(全体releaseで死蔵)。consistent=Trueなら設定上の問題なし。"""
+    shadowed_forbid(全体releaseで死蔵)。consistent=Trueなら設定上の問題なし。
+    eager を渡すと実行モードも切替: True=add_constraint 時に自動検査して警告を添える / False=明示呼びのみ(既定)。"""
+    if eager is not None:
+        store.set_constraint_check_eager(eager)
     return store.check_constraints(branch)
-
-
-@mcp.tool()
-def set_constraint_check_eager(on: bool) -> dict:
-    """充足性チェックの実行モードを切替える。既定lazy(check_constraintsを明示呼び)。
-    onにすると add_constraint 時に自動で検査し、警告を返り値に添える(作者操作はブロックしない)。"""
-    return store.set_constraint_check_eager(on)
 
 
 # ===================== 散文→事実 抽出/照合 =====================
@@ -356,16 +326,6 @@ def _build_records(chapter_text, chapter, pov_character=None):
 
 
 @mcp.tool()
-def extract_facts(chapter_text: str, chapter: int, pov_character: str = None) -> dict:
-    """章の散文から述語-項レコードを機構が独立に抽出する(KWJA優先/GiNZA退避)。
-    物語固有の属性に畳まず、subject(ゼロ照応解決済み)/predicate/modality(state|event)/
-    arguments(ガ/ヲ/ニ)/tense を汎用形で返す。LLMの読み取りと突き合わせる第二の観測。
-    抽出は不完全なのでauthoritativeでなく候補。通常は reconcile_facts で差分を見るとよい。
-    pov_character を渡すと語り手(著者)に解決された主語をそのキャラに割り当てる。"""
-    return _build_records(chapter_text, chapter, pov_character)
-
-
-@mcp.tool()
 def reconcile_facts(chapter: int, llm_facts: list, chapter_text: str, pov_character: str = None) -> dict:
     """LLMが章から抽出した事実(llm_facts)と、機構が独立抽出した述語-項レコードを(主語,述語)軸で突き合わせる。
     llm_facts は [{subject, predicate}, ...]。
@@ -378,18 +338,6 @@ def reconcile_facts(chapter: int, llm_facts: list, chapter_text: str, pov_charac
     known = [f["subject"] for f in store.get_state("main")["facts"]]
     recs = _build_records(chapter_text, chapter, pov_character)["records"]
     return reconcile_records(chapter, llm_facts, recs, known_entities=known)
-
-
-@mcp.tool()
-def import_extracted(branch: str, chapter_text: str, chapter: int, pov_character: str = None) -> dict:
-    """章の散文から機構抽出した述語-項レコードを、汎用マッピングでKBに取り込む(gateせず)。
-    state→STATE / event→ACT に畳み、述語をvalueにする。取込後 audit で矛盾を表面化できる。
-    物語固有の型付け(LIFE=dead等)が要る箇所は、取込後に作者が add_fact で精緻化する。"""
-    from .kwja_extract import records_to_facts
-
-    recs = _build_records(chapter_text, chapter, pov_character)["records"]
-    facts = records_to_facts(recs)
-    return store.import_facts(branch, facts)
 
 
 # ===================== NLP 起動時セットアップ(抽出を標準に) =====================
