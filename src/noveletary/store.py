@@ -320,6 +320,21 @@ class Store:
             }
         return {"results": results, "atomic": atomic, "applied": True}
 
+    def assert_alias(self, branch, a, b, author="author"):
+        """作者が明示的に呼称 a を b の別名(同一指示対象)として統合する(b が正準)。
+        表層が似ていなくてよい(例: 偽名「ミスター・グレイ」=「マイケル・コール」)。
+        ALIAS質問への answer_question('同一') と等価だが、質問を待たず能動宣言できる。
+        統合で正体レベルの矛盾(故人の行為など)が表面化し得るので merge後のhard監査を併せて返す。"""
+        op = self._commit(branch, "merge_alias", {"from": a, "to": b}, 0, author)
+        hv = self.audit(branch)["hard_violations"]
+        return {"status": "aliased", "alias": a, "canonical": b, "op_id": op, "hard_violations": hv}
+
+    def assert_distinct(self, branch, a, b, author="author"):
+        """作者が呼称 a と b を別人(別指示対象)として固定する(cannot_link)。同姓の別人など。
+        以後この対で ALIAS 質問は出ず、自動別名統合もされない。answer_question('別物') と等価。"""
+        op = self._commit(branch, "cannot_link", {"a": a, "b": b}, 0, author)
+        return {"status": "distinct", "a": a, "b": b, "op_id": op}
+
     def _alias_question(self, branch, kb, subject):
         cs = kb._canon(subject)
         for g in kb.facts.values():

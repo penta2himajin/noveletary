@@ -22,6 +22,31 @@ def test_add_commits_clean(s):
     assert r["status"] == "committed" and r["fid"].startswith("fct_")
 
 
+def test_assert_alias_merges_unrelated_names(s):
+    # 表層が似ていない別名(偽名)を作者が明示統合できる
+    s.add("main", "マイケル・コール", "STATE", "相続人", 3)
+    s.add("main", "ミスター・グレイ", "STATE", "灰色の紳士", 2)
+    r = s.assert_alias("main", "ミスター・グレイ", "マイケル・コール")
+    assert r["status"] == "aliased"
+    assert s.get_state("main")["aliases"].get("ミスター・グレイ") == "マイケル・コール"
+
+
+def test_assert_alias_makes_identity_checkable(s):
+    # 別名統合で「グレイの行為」が故人マイケルの死後行為として検出される
+    s.add("main", "マイケル・コール", "LIFE", "dead", 1)
+    s.add("main", "ミスター・グレイ", "ACT", "歩く", 2, kind="EVENT")  # 別主体なら矛盾なし
+    r = s.assert_alias("main", "ミスター・グレイ", "マイケル・コール")
+    assert any(v["type"] == "FORBID_AFTER_STATE" for v in r["hard_violations"])
+
+
+def test_assert_distinct_suppresses_alias_question(s):
+    # 別人と明示固定すれば、同姓でも以後ALIAS質問が出ない
+    s.add("main", "セバスチャン・コール", "RANK", "時計師", 0)
+    s.assert_distinct("main", "マイケル・コール", "セバスチャン・コール")
+    r = s.add("main", "マイケル・コール", "STATE", "甥", 3)
+    assert "question_id" not in r
+
+
 def test_add_many_atomic_rolls_back_on_reject(s):
     # 2件目が矛盾 → atomic ならバッチ全体を巻き戻し、何も適用しない
     facts = [

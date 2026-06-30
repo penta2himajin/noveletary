@@ -170,6 +170,23 @@ def list_open_questions(branch: str = None, status: str = "open") -> dict:
 
 
 @mcp.tool()
+def assert_alias(branch: str, alias: str, canonical: str) -> dict:
+    """2つの呼称を同一指示対象として明示統合する(別名)。alias を canonical の別名にする(canonicalが正準)。
+    表層が似ていなくても可——偽名・あだ名・正体判明など「実は同一人物」を一級事実にできる。
+    統合後はエンジンが両者を1実体として検査するので、正体レベルの矛盾(故人の行為など)も検出できる。
+    返り値に統合後の hard 監査結果(hard_violations)を含む。ALIAS質問への answer_question('同一') と等価だが、
+    質問を待たず作者が能動的に宣言できる。"""
+    return store.assert_alias(branch, alias, canonical)
+
+
+@mcp.tool()
+def assert_distinct(branch: str, a: str, b: str) -> dict:
+    """2つの呼称を別人(別指示対象)として明示固定する(cannot_link)。同姓の別人など。
+    以後この対で ALIAS 質問は出ず、自動別名統合もされない。answer_question('別物') と等価。"""
+    return store.assert_distinct(branch, a, b)
+
+
+@mcp.tool()
 def answer_question(qid: int, answer: str) -> dict:
     """作者の回答で質問を解決し、対応する構築操作を確定する。
     ALIAS: answer='同一'で別名統合 / それ以外で別物(cannot_link)。
