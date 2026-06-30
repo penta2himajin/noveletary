@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+# SQLite付随ファイルのみ除外(本体 data/narrative.db は意図的にコミット=リポジトリ内永続化)
+*.db-wal
+*.db-shm
