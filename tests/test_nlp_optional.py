@@ -13,6 +13,23 @@ def _has_ginza():
         return False
 
 
+def test_ensure_kwja_cache_skips_when_present(tmp_path, monkeypatch):
+    # キャッシュに既存なら(ネットワークに触れず)skipしてTrueを返す経路の回帰ガード
+    pytest.importorskip("kwja")
+    from kwja.cli.config import ModelSize
+    from kwja.cli.utils import _CHECKPOINT_FILE_NAMES, _get_model_version
+
+    from noveletary.kwja_extract import ensure_kwja_cache
+
+    monkeypatch.setenv("KWJA_CACHE_DIR", str(tmp_path))
+    ver = _get_model_version()
+    fn = _CHECKPOINT_FILE_NAMES[ModelSize.BASE]["char"]
+    d = tmp_path / ver
+    d.mkdir(parents=True)
+    (d / fn).write_bytes(b"x" * 16)  # char を既存扱いに
+    assert ensure_kwja_cache("base", tasks=("char",)) is True
+
+
 @pytest.mark.skipif(not _has_ginza(), reason="ja_ginza not installed (pip install '.[nlp]')")
 def test_ginza_records_schema():
     from noveletary.extract import ginza_records

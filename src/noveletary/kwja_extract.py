@@ -26,11 +26,63 @@ _kwja = None
 _CASES = ("ガ", "ヲ", "ニ", "ト", "デ", "カラ", "ヘ", "ヨリ", "マデ")
 
 
+def ensure_kwja_cache(model_size="base", tasks=("char", "word")):
+    """KWJAのチェックポイントをキャッシュへ事前充填する。
+
+    KWJA内蔵DL(torch.hub/urllib)は京大配信サーバの不完全な証明書チェーン(中間証明書をAIAでしか
+    辿れない構成)のため、OpenSSLベースのPython(certifi込み)では検証に失敗する。だが KWJA は
+    ファイルが既存ならDLしないので、ここで certifi → curl の順に取得してキャッシュを埋め、内蔵DLを
+    走らせない。戻り値: 充足できたか(bool)。"""
+    import shutil
+    import ssl
+    import subprocess
+    import urllib.request
+
+    from kwja.cli.config import ModelSize
+    from kwja.cli.utils import (
+        _CHECKPOINT_BASE_URL,
+        _CHECKPOINT_FILE_NAMES,
+        _get_kwja_cache_dir,
+        _get_model_version,
+    )
+
+    size = {"tiny": ModelSize.TINY, "base": ModelSize.BASE, "large": ModelSize.LARGE}[model_size]
+    ver = _get_model_version()
+    cache = _get_kwja_cache_dir() / ver
+    cache.mkdir(parents=True, exist_ok=True)
+    for task in tasks:
+        fn = _CHECKPOINT_FILE_NAMES[size][task]
+        dest = cache / fn
+        if dest.exists() and dest.stat().st_size > 0:
+            continue
+        url = f"{_CHECKPOINT_BASE_URL}/kwja/{ver}/{fn}"
+        tmp = dest.with_name(dest.name + ".part")
+        ok = False
+        try:  # 1) portable: python + certifi(サーバが中間証明書を正しく送れば通る)
+            import certifi
+
+            ctx = ssl.create_default_context(cafile=certifi.where())
+            with urllib.request.urlopen(url, context=ctx, timeout=120) as r, open(tmp, "wb") as f:
+                shutil.copyfileobj(r, f)
+            ok = tmp.exists() and tmp.stat().st_size > 0
+        except Exception:  # noqa: BLE001
+            ok = False
+        if not ok and shutil.which("curl"):  # 2) fallback: curl(macOS等のシステム信頼はAIAで中間証明書を補完)
+            ok = subprocess.run(["curl", "-fsSL", "-o", str(tmp), url]).returncode == 0
+        if ok and tmp.exists() and tmp.stat().st_size > 0:
+            tmp.replace(dest)
+        else:
+            tmp.unlink(missing_ok=True)
+            return False
+    return True
+
+
 def _get_kwja(model_size="base"):
     global _kwja
     if _kwja is None:
         from rhoknp import KWJA
 
+        ensure_kwja_cache(model_size)  # 内蔵DLが証明書で失敗する環境向けに事前充填(成功すれば内蔵DLは走らない)
         _kwja = KWJA(options=["--tasks", "char,word", "--model-size", model_size, "--device", "cpu"])
     return _kwja
 
