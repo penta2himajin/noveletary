@@ -16,7 +16,7 @@ import os
 import sqlite3
 import uuid
 
-from .constraints import TEMPLATES, default_constraints
+from .constraints import TEMPLATES, check_consistency, default_constraints
 from .engine import Fact, NarrativeKB
 
 
@@ -205,13 +205,33 @@ class Store:
     def list_constraints(self, branch):
         return self.materialize_constraints(branch)
 
+    def _eager_cc(self):
+        row = self.db.execute("SELECT v FROM meta WHERE k='eager_cc'").fetchone()
+        return bool(row[0]) if row else False
+
+    def set_constraint_check_eager(self, on):
+        """充足性チェックの実行モード。既定lazy(オンデマンド)。onにすると add_constraint 時に自動実行。"""
+        self.db.execute("INSERT OR REPLACE INTO meta VALUES('eager_cc',?)", (1 if on else 0,))
+        self.db.commit()
+        return {"eager_constraint_check": bool(on)}
+
+    def check_constraints(self, branch):
+        """制約セットの構造的な矛盾・無効設定を検出(遅延チェック)。"""
+        issues = check_consistency(self.materialize_constraints(branch))
+        return {"branch": branch, "consistent": len(issues) == 0, "issues": issues}
+
     def add_constraint(self, branch, template, params, scope=None, note="", enabled=True):
         if template not in TEMPLATES and template != "release":
             return {"error": f"unknown template '{template}'. choices: {sorted(TEMPLATES) + ['release']}"}
         cid = self._new_cid()
         rec = {"cid": cid, "template": template, "params": params, "scope": scope or {}, "note": note, "enabled": enabled}
         op = self._commit(branch, "add_constraint", rec, 0)
-        return {"status": "added", "cid": cid, "op_id": op, "constraint": rec}
+        out = {"status": "added", "cid": cid, "op_id": op, "constraint": rec}
+        if self._eager_cc():  # 設定でeagerなら追加直後に充足性を検査(警告のみ; 作者の自由は妨げない)
+            issues = check_consistency(self.materialize_constraints(branch))
+            if issues:
+                out["consistency_warnings"] = issues
+        return out
 
     def set_constraint_enabled(self, branch, cid, enabled):
         cur = {c["cid"] for c in self.materialize_constraints(branch)}
