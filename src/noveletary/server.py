@@ -191,6 +191,43 @@ def answer_question(qid: int, answer: str) -> dict:
     return store.answer_question(qid, answer)
 
 
+# ===================== 制約(作品別ルール / 操作ログでversioned) =====================
+@mcp.tool()
+def list_constraints(branch: str = "main") -> dict:
+    """ブランチで有効な制約(hard規則)を列挙する。各制約は cid / template / params / enabled / note を持つ。
+    制約はコード直書きでなくデータで、ブランチ単位でversion管理される(分岐で継承・ロールバックで巻戻る)。"""
+    return {"branch": branch, "constraints": store.list_constraints(branch)}
+
+
+@mcp.tool()
+def add_constraint(branch: str, template: str, params: dict, scope: dict = None, note: str = "") -> dict:
+    """制約を1件追加する(作者の指示でルールを微調整)。template:
+    - forbid_after_state: 終端状態の後に特定属性を禁止(EC慣性)。params={terminal_attr, terminal_value, forbidden_attrs}。例: 死後の行為禁止。
+    - monotone: 数値の単調性。params={attr, direction("nondecreasing"|"nonincreasing")}。例: 台帳の増加。
+    - acyclic: 順序の無循環。params={order_attr}。例: 時間順序。
+    - release: 終端状態の解放(EC Release)=forbid_after_stateの例外。params={terminal_attr, terminal_value, subject?}。例: 派生作で死者復活を許可。
+    scope={subject:..} で対象主体を限定可。"""
+    return store.add_constraint(branch, template, params, scope, note)
+
+
+@mcp.tool()
+def disable_constraint(branch: str, cid: str) -> dict:
+    """制約を無効化する(削除せず一時停止。ロールバック/再有効化が可能)。"""
+    return store.set_constraint_enabled(branch, cid, False)
+
+
+@mcp.tool()
+def enable_constraint(branch: str, cid: str) -> dict:
+    """無効化した制約を再び有効化する。"""
+    return store.set_constraint_enabled(branch, cid, True)
+
+
+@mcp.tool()
+def remove_constraint(branch: str, cid: str) -> dict:
+    """制約を削除する。操作ログは不変なのでロールバックで復活できる。デフォルト制約も作者が消せる。"""
+    return store.remove_constraint(branch, cid)
+
+
 # ===================== 散文→事実 抽出/照合 =====================
 def _build_records(chapter_text, chapter, pov_character=None):
     """KWJA(ゼロ照応解決済み)優先、無ければGiNZA(degraded)で述語-項レコードを作る。"""
