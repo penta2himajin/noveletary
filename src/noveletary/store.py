@@ -280,6 +280,46 @@ class Store:
             out["question_id"] = q
         return out
 
+    def add_many(self, branch, facts, atomic=False, gate=True, author="author"):
+        """複数factをまとめて追加。
+        atomic=False(既定): 従来通り逐次適用(1件矛盾しても他はcommitされ得る=部分適用)。
+        atomic=True: 1件でも矛盾した時点でバッチ全体を巻き戻し、何も適用しない
+        (head復元 + バッチ中に生んだalias質問の取消)。矛盾を直して再投入する運用向け。
+        facts は [{subject, attribute, value, chapter, kind?, num?}, ...]。"""
+        head_before = self._head(branch)
+        qid_before = self.db.execute("SELECT COALESCE(MAX(qid),0) FROM open_questions").fetchone()[0]
+        results = []
+        rejected = False
+        for fc in facts:
+            r = self.add(
+                branch,
+                fc["subject"],
+                fc["attribute"],
+                fc.get("value"),
+                fc["chapter"],
+                fc.get("kind", "STATE"),
+                fc.get("num"),
+                gate=gate,
+                author=author,
+            )
+            results.append(r)
+            if r.get("status") == "rejected":
+                rejected = True
+                if atomic:
+                    break
+        if atomic and rejected:
+            self.rollback(branch, head_before)
+            self.db.execute("DELETE FROM open_questions WHERE branch=? AND qid>?", (branch, qid_before))
+            self.db.commit()
+            return {
+                "results": results,
+                "atomic": True,
+                "applied": False,
+                "rolled_back_to_op": head_before,
+                "note": "atomic: 矛盾が1件あったためバッチ全体を巻き戻した(何も適用していない)。矛盾を直して再投入せよ。",
+            }
+        return {"results": results, "atomic": atomic, "applied": True}
+
     def _alias_question(self, branch, kb, subject):
         cs = kb._canon(subject)
         for g in kb.facts.values():

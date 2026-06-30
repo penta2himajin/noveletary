@@ -108,25 +108,13 @@ def add_fact(
 
 
 @mcp.tool()
-def add_facts(branch: str, facts: list) -> dict:
+def add_facts(branch: str, facts: list, atomic: bool = False) -> dict:
     """複数の事実をまとめて登録(各々hard制約でgate)。1シーン分の事実を一括投入する時に。
     facts は [{subject, attribute, value, chapter, kind?, num?}, ...]。
-    返り値は各factの結果(committed/rejected)のリスト。"""
-    results = []
-    for fc in facts:
-        results.append(
-            store.add(
-                branch,
-                fc["subject"],
-                fc["attribute"],
-                fc.get("value"),
-                fc["chapter"],
-                fc.get("kind", "STATE"),
-                fc.get("num"),
-                gate=True,
-            )
-        )
-    return {"results": results}
+    atomic=False(既定): 逐次適用。1件矛盾しても他はcommitされ得る(部分適用が残る)。
+    atomic=True: 1件でも矛盾したらバッチ全体を巻き戻し何も適用しない(中途半端な状態を残さない)。
+    返り値: {results:[committed/rejected,...], applied: 適用されたか, (atomicで巻戻時)rolled_back_to_op}。"""
+    return store.add_many(branch, facts, atomic=atomic, gate=True)
 
 
 @mcp.tool()

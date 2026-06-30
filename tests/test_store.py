@@ -22,6 +22,44 @@ def test_add_commits_clean(s):
     assert r["status"] == "committed" and r["fid"].startswith("fct_")
 
 
+def test_add_many_atomic_rolls_back_on_reject(s):
+    # 2件目が矛盾 → atomic ならバッチ全体を巻き戻し、何も適用しない
+    facts = [
+        {"subject": "ハル", "attribute": "LIFE", "value": "dead", "chapter": 1},
+        {"subject": "ハル", "attribute": "ACT", "value": "出航", "chapter": 2, "kind": "EVENT"},
+    ]
+    r = s.add_many("main", facts, atomic=True)
+    assert r["applied"] is False
+    assert any(x["status"] == "rejected" for x in r["results"])
+    assert s.get_state("main")["facts"] == []  # 1件目(dead)も巻き戻る
+
+
+def test_add_many_non_atomic_keeps_partial(s):
+    # 既定(atomic=False)は従来通り逐次適用: 1件目はcommitされ残る
+    facts = [
+        {"subject": "ハル", "attribute": "LIFE", "value": "dead", "chapter": 1},
+        {"subject": "ハル", "attribute": "ACT", "value": "出航", "chapter": 2, "kind": "EVENT"},
+    ]
+    r = s.add_many("main", facts, atomic=False)
+    assert r["applied"] is True
+    states = s.get_state("main")["facts"]
+    assert len(states) == 1 and states[0]["value"] == "dead"
+
+
+def test_add_many_atomic_clears_questions(s):
+    # バッチ中に生んだ alias 質問も atomic 巻き戻しで取り消す
+    s.add("main", "シャーロック・ホームズ", "RANK", "探偵", 1)
+    before = len(s.list_questions("main"))
+    facts = [
+        {"subject": "ホームズ", "attribute": "STATE", "value": "在室", "chapter": 1},  # ALIAS質問が出る
+        {"subject": "X", "attribute": "LIFE", "value": "dead", "chapter": 1},
+        {"subject": "X", "attribute": "ACT", "value": "歩く", "chapter": 2, "kind": "EVENT"},  # reject
+    ]
+    r = s.add_many("main", facts, atomic=True)
+    assert r["applied"] is False
+    assert len(s.list_questions("main")) == before  # 質問が増えていない
+
+
 def test_import_does_not_gate_but_audit_finds(s):
     s.import_facts(
         "main",
