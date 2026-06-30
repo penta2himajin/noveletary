@@ -166,3 +166,64 @@ def default_constraints():
             "note": "時間順序の無循環",
         },
     ]
+
+
+def check_consistency(records):
+    """制約セットの構造的な矛盾・無効設定を検出する(SHACL充足性/包含の実務版)。
+    テンプレートの性質上「空ストーリーは常に充足」なので純粋な不充足は稀。代わりに
+    作者設定ミスを拾う: 増減両立 monotone / 重複 / 対応forbidの無いrelease / 全体releaseで死蔵forbid。
+    遅延検査(既定)。store側の設定で add 時に走らせることもできる。"""
+    import json as _json
+
+    enabled = [r for r in records if r.get("enabled", True)]
+    issues = []
+
+    # ① 同一attrに nondecreasing と nonincreasing(=実質定数強制; 多くは設定ミス)
+    mon = {}
+    for r in enabled:
+        if r["template"] == "monotone":
+            mon.setdefault(r["params"]["attr"], set()).add(r["params"].get("direction", "nondecreasing"))
+    for attr, ds in mon.items():
+        if {"nondecreasing", "nonincreasing"} <= ds:
+            issues.append({"kind": "contradictory_monotone", "detail": f"{attr}に増加と減少の両制約(実質定数強制)"})
+
+    # ② 重複(同一template・同一params・同一scope)
+    seen = set()
+    for r in enabled:
+        key = (
+            r["template"],
+            _json.dumps(r.get("params", {}), sort_keys=True, ensure_ascii=False),
+            _json.dumps(r.get("scope", {}), sort_keys=True, ensure_ascii=False),
+        )
+        if key in seen:
+            issues.append({"kind": "duplicate", "detail": f"{r['template']} の重複(同一params)"})
+        seen.add(key)
+
+    forbids = [r for r in enabled if r["template"] == "forbid_after_state"]
+    releases = [r for r in enabled if r["template"] == "release"]
+
+    def _match(fb, rel):
+        return (
+            fb["params"]["terminal_attr"] == rel["params"].get("terminal_attr")
+            and fb["params"]["terminal_value"] == rel["params"].get("terminal_value")
+        )
+
+    # ③ 対応するforbidの無いrelease(no-op)
+    for rel in releases:
+        if not any(_match(fb, rel) for fb in forbids):
+            p = rel["params"]
+            issues.append(
+                {"kind": "orphan_release", "detail": f"{p.get('terminal_attr')}={p.get('terminal_value')} のreleaseに対応forbidが無い(no-op)"}
+            )
+
+    # ④ 全体release(subject未指定)で常に無効化されるforbid(死蔵)
+    for fb in forbids:
+        if fb.get("scope", {}).get("subject"):
+            continue
+        if any(_match(fb, rel) and rel["params"].get("subject") is None for rel in releases):
+            p = fb["params"]
+            issues.append(
+                {"kind": "shadowed_forbid", "detail": f"{p['terminal_attr']}={p['terminal_value']} のforbidが全体releaseで常時無効化"}
+            )
+
+    return issues
