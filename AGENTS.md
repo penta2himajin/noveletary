@@ -10,11 +10,13 @@ The design principle throughout: the knowledge base and the author are the trust
 
 ```
 src/noveletary/
-  engine.py        # constraint engine: hard-constraint checks, affected-subgraph, alias resolution
-  store.py         # operation log + branches + persistence (SQLite) + gated add / import / audit / merge / questions
+  engine.py        # constraint engine: delegates hard checks to the template executor; affected-subgraph; alias resolution
+  constraints.py   # EC-grounded constraint template executor (forbid_after_state/monotone/acyclic/release) — rules as data
+  store.py         # operation log + branches + persistence (SQLite) + gated add / import / audit / merge / questions / constraints
   server.py        # MCP server (FastMCP, stdio) exposing the store as tools
-  extract.py       # prose -> fact extraction (GiNZA) + reconciliation against LLM self-report
-  kwja_extract.py  # KWJA PAS adapter (zero-anaphora-resolved extraction); pending external model host
+  kwja_extract.py  # KWJA PAS adapter -> generic predicate-argument records (zero-anaphora-resolved); records_to_facts
+  extract.py       # GiNZA fallback producing the same generic record schema (degraded: no modality/zero-anaphora)
+  reconcile.py     # generic reconcile (subject,predicate axis) of LLM self-report vs mechanism records
 tests/             # pytest suite; core tests run without NLP extras
 docs/              # engineering docs (English): handoff protocol, i18n policy
 data/              # SQLite operation log persisted in-repo (data/narrative.db)
@@ -47,7 +49,8 @@ noveletary-mcp                   # stdio; register with: claude mcp add noveleta
 ## Development Principles
 
 - Extraction is a **second, advisory signal**, never authoritative. `reconcile_facts` surfaces likely omissions/fabrications for human confirmation; it does not gate.
-- Hard constraints (use-after-free, monotone break, temporal cycle, orphan-on-delete) gate construction. Soft/semantic checks never gate — they create author questions.
+- Hard constraints gate construction; soft/semantic checks never gate — they create author questions.
+- Hard constraints are **data, not code**: `constraints.py` holds work-agnostic templates; the work-specific instances (params) live in the op-log, are versioned per branch, and are author-operable (add/disable/remove). Defaults are seeded as deletable data, not privileged. Templates are EC-grounded (forbid_after_state = inertia/state-constraint; release = EC Release for per-branch resurrection).
 - Every new contradiction type ships with a test that plants the contradiction and asserts it fires.
 
 ## Architectural Boundaries
