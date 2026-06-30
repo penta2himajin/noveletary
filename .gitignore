@@ -5,6 +5,8 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-# SQLite付随ファイルのみ除外(本体 data/narrative.db は意図的にコミット=リポジトリ内永続化)
+# narrative.db は生成物。初回起動時に生成され、初期値(デフォルト制約)はコード側でseedされる。
+# コミットしない(data/.gitkeep のみ追跡)。詳細は AGENTS.md「Prohibitions #4」。
+*.db
 *.db-wal
 *.db-shm

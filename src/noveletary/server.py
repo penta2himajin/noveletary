@@ -293,7 +293,77 @@ def import_extracted(branch: str, chapter_text: str, chapter: int, pov_character
     return store.import_facts(branch, facts)
 
 
+# ===================== NLP 起動時セットアップ(抽出を標準に) =====================
+def _nlp_modules_present() -> bool:
+    """NLP抽出スタック(KWJA優先 + GiNZA)が import 可能かを軽量チェック(モデルはロードしない)。"""
+    import importlib.util
+
+    return all(importlib.util.find_spec(m) is not None for m in ("kwja", "spacy", "ja_ginza"))
+
+
+def _nlp_extra_requirements() -> list:
+    """インストール済みメタデータから nlp extra の依存を取得(pyproject とのドリフトを避ける)。"""
+    try:
+        from importlib.metadata import requires
+
+        reqs = requires("noveletary") or []
+        nlp = [r.split(";")[0].strip() for r in reqs if 'extra == "nlp"' in r]
+        if nlp:
+            return nlp
+    except Exception:  # noqa: BLE001
+        pass
+    # メタデータが無い場合のフォールバック(pyproject の nlp extra と同期)
+    return [
+        "ginza>=5.2",
+        "ja-ginza>=5.2",
+        "kwja>=2.5",
+        "rhoknp>=1.6",
+        "transformers>=4.50,<4.51",
+        "huggingface_hub>=0.26,<0.31",
+        "torch>=2.0",
+    ]
+
+
+def ensure_nlp(verbose: bool = True) -> bool:
+    """NLP抽出を標準とするための起動時セットアップ。
+    未導入なら nlp extra を自動インストールする(NOVELETARY_NLP_AUTOSETUP=0 で無効化)。
+    pip出力は stdout(MCPプロトコルchannel)を汚さないよう stderr に流す。
+    戻り値: セットアップ後にNLPが利用可能か。"""
+    import sys
+
+    if _nlp_modules_present():
+        return True
+    if os.environ.get("NOVELETARY_NLP_AUTOSETUP", "1").lower() not in ("1", "true", "yes", "on"):
+        if verbose:
+            print(
+                "[noveletary] NLP未導入・自動セットアップ無効(NOVELETARY_NLP_AUTOSETUP=0)。"
+                "extract/reconcile/import_extracted と soft監査はskipされます。",
+                file=sys.stderr,
+            )
+        return False
+
+    import subprocess
+
+    cmd = [sys.executable, "-m", "pip", "install", *_nlp_extra_requirements()]
+    if verbose:
+        print(f"[noveletary] NLP抽出スタック未導入。起動時セットアップを開始: {' '.join(cmd)}", file=sys.stderr)
+    try:
+        subprocess.run(cmd, check=True, stdout=sys.stderr, stderr=sys.stderr)
+    except Exception as e:  # noqa: BLE001
+        print(
+            f"[noveletary] NLP自動セットアップ失敗: {e}\n"
+            "  手動導入: pip install '.[nlp]'(KWJAはPython<3.14が必要)。NLPなしでも core 機能は動作します。",
+            file=sys.stderr,
+        )
+        return False
+    ok = _nlp_modules_present()
+    if verbose:
+        print(f"[noveletary] NLPセットアップ{'完了' if ok else '未完(要確認)'}。", file=sys.stderr)
+    return ok
+
+
 def main():
+    ensure_nlp()  # NLP抽出を標準に: 未導入なら起動時に自動セットアップ(NOVELETARY_NLP_AUTOSETUP=0 で無効化)
     mcp.run()  # stdio transport (Claude Code / Claude Desktop からローカル起動)
 
 

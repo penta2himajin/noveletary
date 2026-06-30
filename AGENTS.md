@@ -19,7 +19,7 @@ src/noveletary/
   reconcile.py     # generic reconcile (subject,predicate axis) of LLM self-report vs mechanism records
 tests/             # pytest suite; core tests run without NLP extras
 docs/              # engineering docs (English): handoff protocol, i18n policy
-data/              # SQLite operation log persisted in-repo (data/narrative.db)
+data/              # SQLite op-log (data/narrative.db) — generated on first run, NOT committed (only data/.gitkeep tracked)
 ```
 
 ## Development Setup
@@ -27,7 +27,7 @@ data/              # SQLite operation log persisted in-repo (data/narrative.db)
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"          # core + test tooling
-pip install -e ".[dev,nlp]"      # add Japanese NLP (GiNZA, KWJA) for extract/reconcile
+pip install -e ".[dev,nlp]"      # Japanese NLP (GiNZA, KWJA) — the standard extraction stack; needs Python < 3.14 for KWJA
 
 # Pre-push hook (ruff format / lint).
 git config core.hooksPath git-hooks
@@ -46,6 +46,17 @@ Running the MCP server locally:
 noveletary-mcp                   # stdio; register with: claude mcp add noveletary -- noveletary-mcp
 ```
 
+NLP extraction is the **standard** path: on startup `noveletary-mcp` checks for the NLP
+stack and auto-installs the `nlp` extra if missing (pip output goes to stderr so the stdio
+protocol stays clean). Disable with `NOVELETARY_NLP_AUTOSETUP=0`. KWJA requires
+**Python < 3.14**; on 3.14+ the auto-setup of KWJA fails and extraction falls back to GiNZA
+(degraded) — use a 3.12/3.13 interpreter for the full stack. KWJA/transformer models
+download lazily from their hosts on first extraction, not at install time.
+
+The DB at `data/narrative.db` (override with `NARRATIVE_DB`) is created on first launch and
+seeded with the **initial values**: the deletable default constraints (forbid-after-state /
+monotone ledger / acyclic order). It is a generated artifact — not committed (see Prohibitions).
+
 ## Development Principles
 
 - Extraction is a **second, advisory signal**, never authoritative. `reconcile_facts` surfaces likely omissions/fabrications for human confirmation; it does not gate.
@@ -57,7 +68,7 @@ noveletary-mcp                   # stdio; register with: claude mcp add noveleta
 
 - `engine.py` stays free of persistence and NLP — pure constraint logic over in-memory facts.
 - `store.py` owns SQLite and the operation log; the engine never touches the database.
-- NLP (`extract.py`, `kwja_extract.py`) is an **optional extra**; core (`engine`, `store`, `server`) must import and pass tests without it.
+- NLP (`extract.py`, `kwja_extract.py`) ships as the `nlp` extra and is the **standard** extraction path (`server.py:ensure_nlp` auto-installs it at startup). It stays a separable extra: core (`engine`, `store`, `server`) must still **import and pass tests without it** — `ensure_nlp` runs only in `main()`, never at import, and extraction degrades to GiNZA / skips when absent.
 - The operation log is append-only. State is derived by replay; rollback moves a branch head and never deletes operations.
 
 ## Prohibitions
@@ -65,7 +76,11 @@ noveletary-mcp                   # stdio; register with: claude mcp add noveleta
 1. Do not make soft/semantic checks gate construction. They produce questions only.
 2. Do not add NLP imports to `engine.py` or `store.py`.
 3. Do not delete operations from the log to implement rollback; move the head instead.
-4. Do not commit a populated `data/narrative.db`; only `data/.gitkeep` is tracked.
+4. Do not commit `data/narrative.db`; only `data/.gitkeep` is tracked. The DB is a generated
+   artifact: it is rebuilt on first launch and its **initial values** (the default constraints)
+   are seeded in code (`store.py` `__init__` → `default_constraints()`), not shipped as a binary.
+   `.gitignore` ignores `*.db` accordingly. (Authoritative over the earlier `.gitignore` comment
+   that called the DB "intentionally committed", which is superseded by this rule.)
 
 ## Git Conventions
 
