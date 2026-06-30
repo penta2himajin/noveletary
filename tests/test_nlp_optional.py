@@ -13,6 +13,55 @@ def _has_ginza():
         return False
 
 
+class _M:
+    def __init__(self, text, pos):
+        self.text, self.pos = text, pos
+
+
+class _Phrase:
+    def __init__(self, morphemes):
+        self.morphemes = morphemes
+
+
+class _Head:
+    def __init__(self, lemma):
+        self.lemma = lemma
+
+
+class _BP:
+    # KWJA基本句のダック型(必要属性のみ)
+    def __init__(self, idx, content, head_lemma, particle=None, parent_idx=None):
+        ms = [_M(c, "名詞") for c in content]
+        if particle:
+            ms.append(_M(particle, "助詞"))
+        self.morphemes = ms
+        self.phrase = _Phrase(ms)  # この単純ケースでは文節=基本句
+        self.head = _Head(head_lemma)
+        self.index = idx
+        self.parent = type("P", (), {"index": parent_idx})() if parent_idx is not None else None
+        self.sentence = None
+
+
+def test_content_surface_keeps_compound_noun():
+    # 文節の内容語を連結し、複合名詞が頭形態素に切り詰められないこと
+    from noveletary.kwja_extract import _content_surface
+
+    ms = [_M("補修", "名詞"), _M("潜水", "名詞"), _M("士", "接尾辞"), _M("だ", "判定詞")]
+    bp = type("BP", (), {"phrase": _Phrase(ms), "morphemes": ms, "head": _Head("士")})()
+    assert _content_surface(bp) == "補修潜水士"  # not 「士」
+
+
+def test_np_surface_prepends_genitive_modifier():
+    # 属格の連体修飾(「艦長の」)を前置して名詞句を復元
+    from noveletary.kwja_extract import _np_surface
+
+    head = _BP(1, ["名"], "名")
+    mod = _BP(0, ["艦長"], "艦長", particle="の", parent_idx=1)
+    sent = type("S", (), {"base_phrases": [mod, head]})()
+    head.sentence = mod.sentence = sent
+    assert _np_surface(head) == "艦長の名"  # not 「名」
+
+
 def test_ensure_kwja_cache_skips_when_present(tmp_path, monkeypatch):
     # キャッシュに既存なら(ネットワークに触れず)skipしてTrueを返す経路の回帰ガード
     pytest.importorskip("kwja")

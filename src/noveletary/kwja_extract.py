@@ -87,14 +87,46 @@ def _get_kwja(model_size="base"):
     return _kwja
 
 
+_NONCONTENT_POS = ("助詞", "助動詞", "判定詞", "特殊", "補助記号")
+
+
+def _content_surface(bp):
+    """文節(Phrase)単位の内容表層(複合名詞を保つ)。格助詞/助動詞/判定詞/記号を落として連結。
+    KWJAは複合名詞を基本句(基本句)を跨いで分割する(補修/潜水/士)ため、基本句ではなく
+    それを含む文節の全形態素から取る。例:「補修潜水士だ」→「補修潜水士」,「磁気圏は」→「磁気圏」。"""
+    phrase = getattr(bp, "phrase", None)
+    morphs = phrase.morphemes if phrase is not None else bp.morphemes
+    s = "".join(m.text for m in morphs if m.pos not in _NONCONTENT_POS)
+    return s or bp.head.lemma
+
+
+def _np_surface(bp):
+    """名詞句表層: 内容表層に、属格の連体修飾child(「艦長の」等)を前置して句を復元。
+    例: 「名」(が項) + child「艦長の」→「艦長の名」。"""
+    base = _content_surface(bp)
+    sent = getattr(bp, "sentence", None)
+    if sent is None:
+        return base
+    mods = [
+        c
+        for c in sent.base_phrases
+        if c.parent is not None
+        and c.parent.index == bp.index
+        and c.index < bp.index
+        and any(m.text == "の" and m.pos == "助詞" for m in c.morphemes)
+    ]
+    prefix = "".join(_content_surface(c) + "の" for c in sorted(mods, key=lambda x: x.index))
+    return prefix + base
+
+
 def _resolve_arg(arg, pov_character):
-    """項 → (値, 解決型)。endophoraはlemma、exophoraは外界ラベル(著者→POV)。"""
+    """項 → (値, 解決型)。endophoraは名詞句表層(複合名詞+連体修飾)、exophoraは外界ラベル(著者→POV)。"""
     if type(arg).__name__ == "ExophoraArgument":
         ref = str(getattr(arg, "exophora_referent", "") or "")
         if "著者" in ref:
             return (pov_character or "(著者/POV)"), "著者→POV"
         return f"(外界:{ref})", "外界照応"
-    head = arg.base_phrase.head.lemma
+    head = _np_surface(arg.base_phrase)
     atype = getattr(arg, "type", None)
     aname = atype.name if atype is not None else ""
     if aname in ("OMISSION", "CASE_HIDDEN"):
@@ -114,7 +146,7 @@ def _adjunct_cases(pred_bp, sent):
         particles = [m.text for m in bp.morphemes if m.pos == "助詞"]
         for pt in particles:
             if pt in want:
-                out[want[pt]] = bp.head.lemma
+                out[want[pt]] = _content_surface(bp)
                 break
     return out
 
@@ -141,10 +173,13 @@ def _records_from_doc(doc, chapter, pov_character):
             for case, val in _adjunct_cases(bp, sent).items():
                 args.setdefault(case, val)
             modality = "state" if "状態述語" in f else ("event" if "動態述語" in f else None)
+            # 名詞述語(判定詞: 「潜水士だ」)は頭形態素だと「士」に切れるので内容表層で復元。用言(動/形)はlemmaで正規化。
+            ptype = f.get("用言")
+            predicate = _content_surface(bp) if ptype == "判" else bp.head.lemma
             out.append(
                 {
                     "subject": ga_subject,
-                    "predicate": bp.head.lemma,
+                    "predicate": predicate,
                     "modality": modality,
                     "predicate_type": f.get("用言"),
                     "arguments": args,
