@@ -22,6 +22,38 @@ def test_add_commits_clean(s):
     assert r["status"] == "committed" and r["fid"].startswith("fct_")
 
 
+# ---- Phase B: valid-time を区間 [valid_from, valid_to) に ----
+def test_valid_to_defaults_open_ended(s):
+    s.add("main", "ハル", "STATE", "在室", 3)  # valid_to 未指定 = ∞
+    assert s.get_state("main")["facts"][0]["valid_to"] is None
+
+
+def test_bounded_fluent_invisible_after_valid_to(s):
+    s.add("main", "セバスチャン", "LOC", "工房", 0, valid_to=1)  # [0,1)
+    assert len(s.get_state("main", as_of_chapter=0)["facts"]) == 1  # 第0章は在る
+    assert s.get_state("main", as_of_chapter=5)["facts"] == []  # 第1章以降は無い
+
+
+def test_background_fluent_bounded_at_death_ok(s):
+    # 経歴/居所を死で畳めば(clockmakerケース)、終端と衝突しない
+    s.add("main", "セバスチャン", "LIFE", "dead", 1)
+    r = s.add("main", "セバスチャン", "LOC", "工房", 0, valid_to=1)  # 生前の居所、死で終了
+    assert r["status"] == "committed"
+
+
+def test_reinitiation_after_death_still_forbidden(s):
+    # 死後の新規initiation(valid_from>=死)は valid_to に関係なく弾く(回帰)
+    s.add("main", "セバスチャン", "LIFE", "dead", 1)
+    r = s.add("main", "セバスチャン", "LOC", "酒場", 5, valid_to=9)  # [5,9) 死後に動く
+    assert r["status"] == "rejected"
+
+
+def test_valid_to_survives_snapshot(s):
+    for i in range(26):  # スナップショット(op25)跨ぎ
+        s.add("main", f"E{i}", "STATE", "x", 0, valid_to=2)  # 全部 [0,2)
+    assert s.get_state("main", as_of_chapter=5)["facts"] == []  # 第5章には全て終了済み
+
+
 # ---- Phase A: discourse 軸 narrated_in(語りの章) を valid-time(物語内時間) と分離 ----
 def test_narrated_in_defaults_to_valid_time(s):
     s.add("main", "ハル", "STATE", "在室", 3)

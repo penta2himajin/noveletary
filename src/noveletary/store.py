@@ -127,6 +127,7 @@ class Store:
                 p.get("num"),
                 p.get("deps", []),
                 narrated_in=p.get("narrated_in"),
+                valid_to=p.get("valid_to"),
             )
         elif op_type == "merge_alias":
             kb.aliases[p["from"]] = p["to"]
@@ -136,14 +137,24 @@ class Store:
             if p["fid"] in kb.facts:
                 o = kb.facts[p["fid"]]
                 kb.facts[p["fid"]] = Fact(
-                    o.fid, o.subj, o.attr, p["value"], o.t, o.kind, p.get("num"), narrated_in=o.narrated_in
+                    o.fid,
+                    o.subj,
+                    o.attr,
+                    p["value"],
+                    o.t,
+                    o.kind,
+                    p.get("num"),
+                    narrated_in=o.narrated_in,
+                    valid_to=o.valid_to,
                 )
         elif op_type == "delete_fact":
             kb.facts.pop(p["fid"], None)
 
     def _snapshot(self, branch, op_id):
         kb = self.materialize(branch, upto_op=op_id)
-        facts = {fid: (f.subj, f.attr, f.value, f.t, f.kind, f.num, f.narrated_in) for fid, f in kb.facts.items()}
+        facts = {
+            fid: (f.subj, f.attr, f.value, f.t, f.kind, f.num, f.narrated_in, f.valid_to) for fid, f in kb.facts.items()
+        }
         self.db.execute(
             "INSERT OR REPLACE INTO snapshots VALUES(?,?)",
             (
@@ -174,21 +185,31 @@ class Store:
             for fid, vals in snap["facts"].items():
                 s, a, v, t, k, nm = vals[:6]  # 旧snapshot(6要素)互換
                 ni = vals[6] if len(vals) > 6 else None  # narrated_in(7要素目)
+                vt = vals[7] if len(vals) > 7 else None  # valid_to(8要素目)
                 # スナップショット復元factにも時間スライスを適用(delta replayと同一規準)
-                if as_of_valid is not None and t is not None and t > as_of_valid:
+                if as_of_valid is not None and (
+                    (t is not None and t > as_of_valid) or (vt is not None and as_of_valid >= vt)
+                ):
                     continue
                 if as_of_narrated is not None:
                     nn = ni if ni is not None else t
                     if nn is not None and nn > as_of_narrated:
                         continue
-                kb.facts[fid] = Fact(fid, s, a, v, t, k, nm, narrated_in=ni)
+                kb.facts[fid] = Fact(fid, s, a, v, t, k, nm, narrated_in=ni, valid_to=vt)
             kb.aliases = snap["aliases"]
             kb.cannot_link = {frozenset(x) for x in snap["cl"]}
         for oid, parent, op_type, payload, vf, author in delta:
-            if as_of_valid is not None and vf is not None and vf > as_of_valid:
-                continue
+            pj = None
+            if as_of_valid is not None:
+                if vf is not None and vf > as_of_valid:  # まだ真でない(開始>スライス点)
+                    continue
+                pj = json.loads(payload)
+                vt = pj.get("valid_to")  # 区間終了(排他)。旧op/構造opは欠落→∞
+                if vt is not None and as_of_valid >= vt:  # 既に終了している
+                    continue
             if as_of_narrated is not None:
-                n = json.loads(payload).get("narrated_in")  # 旧op/構造opは欠落→valid_from(vf)で代替
+                pj = pj if pj is not None else json.loads(payload)
+                n = pj.get("narrated_in")  # 旧op/構造opは欠落→valid_from(vf)で代替
                 if n is None:
                     n = vf
                 if n is not None and n > as_of_narrated:
@@ -289,10 +310,11 @@ class Store:
         gate=True,
         author="author",
         narrated_in=None,
+        valid_to=None,
     ):
         kb = self.materialize(branch)
         fid = self._new_fid()
-        f = Fact(fid, subject, attribute, value, chapter, kind, num, narrated_in=narrated_in)
+        f = Fact(fid, subject, attribute, value, chapter, kind, num, narrated_in=narrated_in, valid_to=valid_to)
         # hard制約検査(影響部分グラフ)。検査は valid-time(chapter)基準で行う。
         scope = kb._affected(f)
         viol = kb._check_hard(f, scope)
@@ -309,6 +331,7 @@ class Store:
                 "kind": kind,
                 "num": num,
                 "narrated_in": narrated_in,
+                "valid_to": valid_to,
             },
             chapter,
             author,
@@ -344,6 +367,7 @@ class Store:
                 gate=gate,
                 author=author,
                 narrated_in=fc.get("narrated_in"),
+                valid_to=fc.get("valid_to"),
             )
             results.append(r)
             if r.get("status") == "rejected":
@@ -432,6 +456,7 @@ class Store:
                     "kind": fc.get("kind", "STATE"),
                     "num": fc.get("num"),
                     "narrated_in": fc.get("narrated_in"),
+                    "valid_to": fc.get("valid_to"),
                 },
                 fc["chapter"],
                 author,
@@ -656,6 +681,7 @@ class Store:
                     "attribute": f.attr,
                     "value": f.value,
                     "chapter": f.t,  # valid-time(物語内時間)の開始章
+                    "valid_to": f.valid_to,  # valid-time の終了章(排他); None なら +∞(開区間)
                     "narrated_in": f.narrated,  # discourse-time(語りの章); 未指定なら chapter と同値
                     "kind": f.kind,
                     "num": f.num,
