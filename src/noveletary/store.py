@@ -44,7 +44,7 @@ class Store:
         CREATE TABLE IF NOT EXISTS branches(
           branch_id INTEGER PRIMARY KEY AUTOINCREMENT,
           name TEXT UNIQUE, head_op INTEGER, forked_from INTEGER);
-        CREATE TABLE IF NOT EXISTS snapshots(op_id INTEGER PRIMARY KEY, facts TEXT);
+        CREATE TABLE IF NOT EXISTS snapshots(op_id INTEGER PRIMARY KEY, facts TEXT, branch_id INTEGER);
         CREATE TABLE IF NOT EXISTS open_questions(
           qid INTEGER PRIMARY KEY AUTOINCREMENT,
           branch TEXT, qtype TEXT, payload TEXT,
@@ -52,6 +52,10 @@ class Store:
           created_ts INTEGER, resolved_ts INTEGER);
         CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v INTEGER);
         """)
+        # 既存DB移行: snapshots に branch_id 列が無ければ追加(旧snapshotは NULL→どのブランチにも採用されず full replay=安全)
+        cols = [r[1] for r in self.db.execute("PRAGMA table_info(snapshots)").fetchall()]
+        if "branch_id" not in cols:
+            self.db.execute("ALTER TABLE snapshots ADD COLUMN branch_id INTEGER")
         self.db.commit()
 
     def _tick(self):
@@ -156,12 +160,13 @@ class Store:
             fid: (f.subj, f.attr, f.value, f.t, f.kind, f.num, f.narrated_in, f.valid_to) for fid, f in kb.facts.items()
         }
         self.db.execute(
-            "INSERT OR REPLACE INTO snapshots VALUES(?,?)",
+            "INSERT OR REPLACE INTO snapshots(op_id,facts,branch_id) VALUES(?,?,?)",
             (
                 op_id,
                 json.dumps(
                     {"facts": facts, "aliases": kb.aliases, "cl": [list(x) for x in kb.cannot_link]}, ensure_ascii=False
                 ),
+                self._branch_id(branch),
             ),
         )
         self.db.commit()
@@ -174,8 +179,10 @@ class Store:
         head = upto_op if upto_op is not None else self._head(branch)
         if head is None:
             return NarrativeKB()
+        # スナップショットは同一ブランチのもののみ採用(op_idはグローバルなので他ブランチの混入を防ぐ)
         row = self.db.execute(
-            "SELECT op_id,facts FROM snapshots WHERE op_id<=? ORDER BY op_id DESC", (head,)
+            "SELECT op_id,facts FROM snapshots WHERE op_id<=? AND branch_id=? ORDER BY op_id DESC",
+            (head, self._branch_id(branch)),
         ).fetchone()
         stop = row[0] if row else None
         delta = self._ancestors(head, stop=stop)

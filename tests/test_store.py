@@ -105,6 +105,17 @@ def test_as_of_chapter_respects_snapshot(s):
     assert s.get_state("main", as_of_chapter=10)["facts"] == []  # 第10章時点には未だ無い
 
 
+def test_snapshot_does_not_leak_across_branches(s):
+    # スナップショットはグローバルop_idで保存されるが、ブランチ境界を越えて混入してはならない
+    s.create_branch("A", "main")
+    for i in range(30):  # A をスナップショット閾値(25op)超で進める
+        s.add("A", f"A{i}", "STATE", "x", 1)
+    s.create_branch("B", "main")  # 初期点から分岐(A の fact は B の祖先ではない)
+    s.add("B", "唯一", "STATE", "y", 1)
+    subs = {f["subject"] for f in s.get_state("B")["facts"]}
+    assert subs == {"唯一"}  # A の 30 fact が混入しないこと
+
+
 def test_assert_alias_merges_unrelated_names(s):
     # 表層が似ていない別名(偽名)を作者が明示統合できる
     s.add("main", "マイケル・コール", "STATE", "相続人", 3)
