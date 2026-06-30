@@ -414,9 +414,23 @@ class Store:
         for g in kb.facts.values():
             gs = kb._canon(g.subj)
             if gs != cs and self._similar(cs, gs) and frozenset((cs, gs)) not in kb.cannot_link:
+                dup = self._open_alias_qid(branch, cs, gs)  # 同一ペアの未解決質問があれば再利用(重複生成しない)
+                if dup is not None:
+                    return dup
                 return self.create_question(
                     branch, "ALIAS", {"a": cs, "b": gs, "q": f"『{cs}』と既存の『{gs}』は同一指示対象か?"}
                 )
+        return None
+
+    def _open_alias_qid(self, branch, a, b):
+        """ブランチ上の open な ALIAS 質問で {a,b} ペアが既出ならその qid を返す(順不同照合)。"""
+        rows = self.db.execute(
+            "SELECT qid,payload FROM open_questions WHERE branch=? AND qtype='ALIAS' AND status='open'", (branch,)
+        ).fetchall()
+        for qid, payload in rows:
+            p = json.loads(payload)
+            if {p.get("a"), p.get("b")} == {a, b}:
+                return qid
         return None
 
     def _similar(self, a, b):

@@ -116,6 +116,19 @@ def test_snapshot_does_not_leak_across_branches(s):
     assert subs == {"唯一"}  # A の 30 fact が混入しないこと
 
 
+def test_alias_question_deduped(s):
+    # 同一ペアの open ALIAS 質問は重複生成しない(同じ主体の fact を複数足しても1つ)
+    s.add("main", "セバスチャン・コール", "RANK", "時計師", 0)
+    qids = set()
+    for _ in range(3):
+        r = s.add("main", "マイケル・コール", "STATE", "甥", 3)
+        if "question_id" in r:
+            qids.add(r["question_id"])
+    aliasqs = [q for q in s.list_questions("main") if q["type"] == "ALIAS"]
+    assert len(aliasqs) == 1  # 同一ペアは1つ
+    assert len(qids) == 1  # 各 add は同じ qid を指す
+
+
 def test_assert_alias_merges_unrelated_names(s):
     # 表層が似ていない別名(偽名)を作者が明示統合できる
     s.add("main", "マイケル・コール", "STATE", "相続人", 3)
