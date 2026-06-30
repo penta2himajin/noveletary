@@ -228,6 +228,21 @@ def remove_constraint(branch: str, cid: str) -> dict:
     return store.remove_constraint(branch, cid)
 
 
+@mcp.tool()
+def check_constraints(branch: str = "main") -> dict:
+    """制約セットの構造的な矛盾・無効設定を検査する(遅延/オンデマンド)。
+    検出: contradictory_monotone(増減両立) / duplicate(重複) / orphan_release(対応forbid無し) /
+    shadowed_forbid(全体releaseで死蔵)。consistent=Trueなら設定上の問題なし。"""
+    return store.check_constraints(branch)
+
+
+@mcp.tool()
+def set_constraint_check_eager(on: bool) -> dict:
+    """充足性チェックの実行モードを切替える。既定lazy(check_constraintsを明示呼び)。
+    onにすると add_constraint 時に自動で検査し、警告を返り値に添える(作者操作はブロックしない)。"""
+    return store.set_constraint_check_eager(on)
+
+
 # ===================== 散文→事実 抽出/照合 =====================
 def _build_records(chapter_text, chapter, pov_character=None):
     """KWJA(ゼロ照応解決済み)優先、無ければGiNZA(degraded)で述語-項レコードを作る。"""
