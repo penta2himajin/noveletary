@@ -795,6 +795,27 @@ class Store:
             ],
         }
 
+    # ---------------- アウトライン(章ビート) ----------------
+    def set_beat(self, branch, chapter, beat, author="author"):
+        """章ビート(その章の設計=1段落)を登録/更新。attribute=BEAT, subject=chNN の fact。
+        執筆前に置き、本文は『ビートを現在カノンに矛盾せず展開する』タスクに変える(アウトライン先行)。冪等。"""
+        subj = f"ch{chapter}"
+        kb = self.materialize(branch)
+        existing = [f for f in kb.facts.values() if f.attr == "BEAT" and f.subj == subj]
+        if existing:
+            return self.retag(branch, existing[0].fid, value=beat)
+        return self.add(branch, subj, "BEAT", beat, chapter, kind="STATE", gate=False, author=author)
+
+    def get_outline(self, branch, from_chapter=None, to_chapter=None):
+        """章ビート(プロット骨格)を章順で返す。範囲指定可。"""
+        kb = self.materialize(branch)
+        beats = [{"chapter": f.t, "beat": f.value, "fid": f.fid} for f in kb.facts.values() if f.attr == "BEAT"]
+        if from_chapter is not None:
+            beats = [b for b in beats if b["chapter"] >= from_chapter]
+        if to_chapter is not None:
+            beats = [b for b in beats if b["chapter"] <= to_chapter]
+        return sorted(beats, key=lambda b: b["chapter"])
+
     # ---------------- 伏線(SETUP)と章ブリーフ ----------------
     def add_setup(self, branch, setup, chapter, payoff_by=None, subject="伏線", author="author"):
         """未回収にしたくない伏線(チェーホフの銃)を登録。attribute=SETUP の fact として持つ。
@@ -858,9 +879,11 @@ class Store:
             {"cid": c["cid"], "template": c["template"], "note": c.get("note", "")}
             for c in self.materialize_constraints(branch)
         ]
+        beat = next((f.value for f in kb.facts.values() if f.attr == "BEAT" and f.subj == f"ch{chapter}"), None)
         return {
             "branch": branch,
             "chapter": chapter,
+            "beat": beat,  # この章の設計(アウトライン先行); set_beat 済みなら本文展開の指針
             "characters": characters,
             "world": world,
             "constraints": constraints,

@@ -209,6 +209,16 @@ def test_assert_distinct_suppresses_alias_question(s):
     assert "question_id" not in r
 
 
+def test_set_beat_get_outline_and_brief(s):
+    s.set_beat("main", 1, "イオ、解雇され海溝へ")
+    s.set_beat("main", 2, "黒い廃艦と遭遇")
+    s.set_beat("main", 1, "イオ、最後の任務で海溝へ向かう")  # 同章は更新(冪等)
+    outline = s.get_outline("main")
+    assert [b["chapter"] for b in outline] == [1, 2]  # 重複せず章順
+    assert outline[0]["beat"] == "イオ、最後の任務で海溝へ向かう"  # 更新が反映
+    assert s.chapter_brief("main", 2)["beat"] == "黒い廃艦と遭遇"  # briefに当該章ビート同梱
+
+
 def test_open_setups_overdue_and_resolve(s):
     fid = s.add_setup("main", "時計のゼンマイに伏線", chapter=2, payoff_by=5)["fid"]
     s.add_setup("main", "灰色の紳士の正体", chapter=2)  # 期限なし

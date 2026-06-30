@@ -101,6 +101,20 @@ def chapter_brief(branch: str = "main", chapter: int = 1) -> dict:
 
 
 @mcp.tool()
+def set_beat(branch: str, chapter: int, beat: str) -> dict:
+    """章ビート(その章の設計=1段落: 誰が出て何が起き何が変わり何を仕込む/回収するか)を登録/更新する(アウトライン先行)。
+    執筆前にビートを置けば、本文生成は『ビートを現在カノンに矛盾せず展開する』低負荷タスクになり、漂流が減る。
+    同章への再登録は更新(冪等)。chapter_brief に当該章の beat が同梱される。"""
+    return store.set_beat(branch, chapter, beat)
+
+
+@mcp.tool()
+def get_outline(branch: str = "main", from_chapter: int = None, to_chapter: int = None) -> dict:
+    """章ビート(プロット骨格)を章順で返す。range 指定可。各部の頭でビートを並べて整合を俯瞰するのに使う。"""
+    return {"branch": branch, "outline": store.get_outline(branch, from_chapter, to_chapter)}
+
+
+@mcp.tool()
 def add_setup(branch: str, setup: str, chapter: int, payoff_by: int = None, thread: str = "伏線") -> dict:
     """伏線(チェーホフの銃)を登録して未回収を追跡する。setup=仕込みの説明, chapter=仕込んだ(語った)章,
     payoff_by=回収すべき期限の章(任意; 超過すると chapter_brief/open_setups で overdue 表示), thread=伏線の識別名。
