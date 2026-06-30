@@ -1,0 +1,493 @@
+"""
+store.py — 制約維持された物語KB + 物語ブランチ + 永続化(SQLite)
+MCPサーバーの中核。engine(制約エンジン)を操作ログ/ブランチ層で包む。
+
+設計:
+- operations: 不変・append-only。唯一の真実の源。
+- branches : head_op を指すポインタ。分岐=1行。
+- open_questions: 未解決(alias/競合/意味矛盾)を永続化。作者oracleが答える。
+- 状態は materialize(replay)で導出。snapshotで高速化。
+- add は hard制約で gate(prevention) / import は gateせず後で audit(detection)。
+"""
+
+import json
+import os
+import sqlite3
+import uuid
+
+from .engine import Fact, NarrativeKB
+
+
+class Store:
+    def __init__(self, path="data/narrative.db"):
+        new = not os.path.exists(path) if path != ":memory:" else True
+        if path != ":memory:":
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        self.db = sqlite3.connect(path)
+        self.db.execute("PRAGMA journal_mode=WAL")
+        self._init_schema()
+        if new and self._branch_id("main") is None:
+            self._insert_branch("main", None, None)
+
+    # ---------------- schema ----------------
+    def _init_schema(self):
+        self.db.executescript("""
+        CREATE TABLE IF NOT EXISTS operations(
+          op_id INTEGER PRIMARY KEY AUTOINCREMENT,
+          parent_id INTEGER, branch_id INTEGER,
+          op_type TEXT, payload TEXT,
+          valid_from INTEGER, author TEXT, ts INTEGER);
+        CREATE TABLE IF NOT EXISTS branches(
+          branch_id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT UNIQUE, head_op INTEGER, forked_from INTEGER);
+        CREATE TABLE IF NOT EXISTS snapshots(op_id INTEGER PRIMARY KEY, facts TEXT);
+        CREATE TABLE IF NOT EXISTS open_questions(
+          qid INTEGER PRIMARY KEY AUTOINCREMENT,
+          branch TEXT, qtype TEXT, payload TEXT,
+          status TEXT DEFAULT 'open', answer TEXT,
+          created_ts INTEGER, resolved_ts INTEGER);
+        CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v INTEGER);
+        """)
+        self.db.commit()
+
+    def _tick(self):
+        row = self.db.execute("SELECT v FROM meta WHERE k='ts'").fetchone()
+        v = (row[0] if row else 0) + 1
+        self.db.execute("INSERT OR REPLACE INTO meta VALUES('ts',?)", (v,))
+        return v
+
+    # ---------------- branches ----------------
+    def _branch_id(self, name):
+        r = self.db.execute("SELECT branch_id FROM branches WHERE name=?", (name,)).fetchone()
+        return r[0] if r else None
+
+    def _insert_branch(self, name, head, forked):
+        cur = self.db.execute("INSERT INTO branches(name,head_op,forked_from) VALUES(?,?,?)", (name, head, forked))
+        self.db.commit()
+        return cur.lastrowid
+
+    def _head(self, name):
+        return self.db.execute("SELECT head_op FROM branches WHERE name=?", (name,)).fetchone()[0]
+
+    def list_branches(self):
+        rows = self.db.execute("SELECT name,head_op,forked_from FROM branches").fetchall()
+        return [{"name": n, "head_op": h, "forked_from": f} for n, h, f in rows]
+
+    def create_branch(self, name, from_branch="main", at_op=None):
+        if self._branch_id(name) is not None:
+            return {"error": f"branch '{name}' already exists"}
+        head = at_op if at_op is not None else self._head(from_branch)
+        self._insert_branch(name, head, head)
+        return {"created": name, "forked_from_op": head}
+
+    # ---------------- operations ----------------
+    def _commit(self, branch, op_type, payload, valid_from, author="author"):
+        ts = self._tick()
+        parent = self._head(branch)
+        bid = self._branch_id(branch)
+        cur = self.db.execute(
+            "INSERT INTO operations(parent_id,branch_id,op_type,payload,valid_from,author,ts) VALUES(?,?,?,?,?,?,?)",
+            (parent, bid, op_type, json.dumps(payload, ensure_ascii=False), valid_from, author, ts),
+        )
+        op = cur.lastrowid
+        self.db.execute("UPDATE branches SET head_op=? WHERE name=?", (op, branch))
+        self.db.commit()
+        if op % 25 == 0:
+            self._snapshot(branch, op)
+        return op
+
+    def _ancestors(self, op_id, stop=None):
+        ops = []
+        cur = op_id
+        while cur is not None and cur != stop:
+            r = self.db.execute(
+                "SELECT op_id,parent_id,op_type,payload,valid_from,author FROM operations WHERE op_id=?", (cur,)
+            ).fetchone()
+            if r is None:
+                break
+            ops.append(r)
+            cur = r[1]
+        return list(reversed(ops))
+
+    # ---------------- replay / snapshot ----------------
+    def _apply(self, kb, op_type, payload, vf):
+        p = json.loads(payload)
+        if op_type == "add_fact":
+            kb.facts[p["fid"]] = Fact(
+                p["fid"],
+                p["subj"],
+                p["attr"],
+                p.get("value"),
+                vf,
+                p.get("kind", "STATE"),
+                p.get("num"),
+                p.get("deps", []),
+            )
+        elif op_type == "merge_alias":
+            kb.aliases[p["from"]] = p["to"]
+        elif op_type == "cannot_link":
+            kb.cannot_link.add(frozenset((p["a"], p["b"])))
+        elif op_type == "supersede":
+            if p["fid"] in kb.facts:
+                o = kb.facts[p["fid"]]
+                kb.facts[p["fid"]] = Fact(o.fid, o.subj, o.attr, p["value"], o.t, o.kind, p.get("num"))
+        elif op_type == "delete_fact":
+            kb.facts.pop(p["fid"], None)
+
+    def _snapshot(self, branch, op_id):
+        kb = self.materialize(branch, upto_op=op_id)
+        facts = {fid: (f.subj, f.attr, f.value, f.t, f.kind, f.num) for fid, f in kb.facts.items()}
+        self.db.execute(
+            "INSERT OR REPLACE INTO snapshots VALUES(?,?)",
+            (
+                op_id,
+                json.dumps(
+                    {"facts": facts, "aliases": kb.aliases, "cl": [list(x) for x in kb.cannot_link]}, ensure_ascii=False
+                ),
+            ),
+        )
+        self.db.commit()
+
+    def materialize(self, branch, as_of_valid=None, upto_op=None):
+        head = upto_op if upto_op is not None else self._head(branch)
+        if head is None:
+            return NarrativeKB()
+        row = self.db.execute(
+            "SELECT op_id,facts FROM snapshots WHERE op_id<=? ORDER BY op_id DESC", (head,)
+        ).fetchone()
+        stop = row[0] if row else None
+        delta = self._ancestors(head, stop=stop)
+        kb = NarrativeKB()
+        if row:
+            snap = json.loads(row[1])
+            for fid, (s, a, v, t, k, nm) in snap["facts"].items():
+                kb.facts[fid] = Fact(fid, s, a, v, t, k, nm)
+            kb.aliases = snap["aliases"]
+            kb.cannot_link = {frozenset(x) for x in snap["cl"]}
+        for oid, parent, op_type, payload, vf, author in delta:
+            if as_of_valid is not None and vf is not None and vf > as_of_valid:
+                continue
+            self._apply(kb, op_type, payload, vf)
+        return kb
+
+    # ---------------- 自動ID ----------------
+    def _new_fid(self):
+        return "fct_" + uuid.uuid4().hex[:8]
+
+    # ---------------- 構築: add (gate付き) ----------------
+    def add(self, branch, subject, attribute, value, chapter, kind="STATE", num=None, gate=True, author="author"):
+        kb = self.materialize(branch)
+        fid = self._new_fid()
+        f = Fact(fid, subject, attribute, value, chapter, kind, num)
+        # hard制約検査(影響部分グラフ)
+        scope = kb._affected(f)
+        viol = kb._check_hard(f, scope)
+        if viol and gate:
+            return {"status": "rejected", "conflict": [{"type": t, "facts": c, "detail": d} for (t, c, d) in viol]}
+        op = self._commit(
+            branch,
+            "add_fact",
+            {"fid": fid, "subj": subject, "attr": attribute, "value": value, "kind": kind, "num": num},
+            chapter,
+            author,
+        )
+        # ソフト: 別名曖昧 → 質問を永続化
+        q = self._alias_question(branch, kb, subject)
+        out = {"status": "committed", "fid": fid, "op_id": op}
+        if viol and not gate:
+            out["soft_violation"] = [{"type": t, "facts": c, "detail": d} for (t, c, d) in viol]
+        if q:
+            out["question_id"] = q
+        return out
+
+    def _alias_question(self, branch, kb, subject):
+        cs = kb._canon(subject)
+        for g in kb.facts.values():
+            gs = kb._canon(g.subj)
+            if gs != cs and self._similar(cs, gs) and frozenset((cs, gs)) not in kb.cannot_link:
+                return self.create_question(
+                    branch, "ALIAS", {"a": cs, "b": gs, "q": f"『{cs}』と既存の『{gs}』は同一指示対象か?"}
+                )
+        return None
+
+    def _similar(self, a, b):
+        A, B = set(a), set(b)
+        return (len(A & B) / len(A | B) if (A | B) else 0) >= 0.3
+
+    def update(self, branch, fid, new_value, num=None, author="author"):
+        kb = self.materialize(branch)
+        if fid not in kb.facts:
+            return {"error": f"fact {fid} not found"}
+        old = kb.facts[fid]
+        nf = Fact(fid, old.subj, old.attr, new_value, old.t, old.kind, num)
+        scope = [g for g in kb._affected(nf) if g.fid != fid]
+        viol = kb._check_hard(nf, scope)
+        if viol:
+            return {
+                "status": "rejected(retcon)",
+                "conflict": [{"type": t, "facts": c, "detail": d} for (t, c, d) in viol],
+            }
+        op = self._commit(branch, "supersede", {"fid": fid, "value": new_value, "num": num}, old.t, author)
+        return {"status": "superseded", "fid": fid, "op_id": op}
+
+    def delete(self, branch, fid):
+        kb = self.materialize(branch)
+        orphans = [g.fid for g in kb.facts.values() if fid in g.deps]
+        if orphans:
+            return {"status": "rejected(orphan)", "dependent_facts": orphans}
+        op = self._commit(branch, "delete_fact", {"fid": fid}, 0)
+        return {"status": "deleted", "fid": fid, "op_id": op}
+
+    # ---------------- 取込: 既存作品(gateせず, 後で監査) ----------------
+    def import_facts(self, branch, facts, author="import"):
+        committed = []
+        for fc in facts:
+            fid = self._new_fid()
+            self._commit(
+                branch,
+                "add_fact",
+                {
+                    "fid": fid,
+                    "subj": fc["subject"],
+                    "attr": fc["attribute"],
+                    "value": fc.get("value"),
+                    "kind": fc.get("kind", "STATE"),
+                    "num": fc.get("num"),
+                },
+                fc["chapter"],
+                author,
+            )
+            committed.append(fid)
+        return {"imported": len(committed), "fids": committed}
+
+    # ---------------- 検証 ----------------
+    STATE_ATTRS = {"LIFE", "LOC", "RANK", "STATE", "ALLIANCE"}
+
+    def _temporal_gate(self, a, b):
+        """① soft監査をNLIに送る前の時間構造ゲート。共存し得ない対を除外。"""
+        sa = a.attr in self.STATE_ATTRS
+        sb = b.attr in self.STATE_ATTRS
+        if not sa and not sb:  # 行為×行為
+            return (a.t == b.t), "同時点の行為" if a.t == b.t else "別時点の行為(非矛盾)"
+        if sa and sb and a.attr == b.attr:  # 同属性の状態
+            return (a.t == b.t), "同章状態" if a.t == b.t else "supersession(遷移)"
+        if sa and sb and a.attr != b.attr:  # 異属性の持続状態=跨ぎ候補
+            return True, "異属性状態の共存(跨ぎ矛盾候補)"
+        return False, "状態×行為(hard担当)"  # 状態×行為
+
+    def audit(self, branch, as_of_valid=None, scorer=None):
+        kb = self.materialize(branch, as_of_valid)
+        hard = []
+        seen = NarrativeKB()
+        seen.aliases = kb.aliases
+        seen.cannot_link = kb.cannot_link
+        for f in sorted(kb.facts.values(), key=lambda x: (x.t, x.fid)):
+            scope = seen._affected(f)
+            v = seen._check_hard(f, scope)
+            for t, c, d in v:
+                hard.append({"type": t, "facts": c, "detail": d})
+            seen.facts[f.fid] = f
+        soft_q = []
+        nli_calls = 0
+        if scorer is not None:
+            from collections import defaultdict
+
+            bysubj = defaultdict(list)
+            for f in kb.facts.values():
+                if f.value:
+                    bysubj[kb._canon(f.subj)].append(f)
+            for subj, fs in bysubj.items():
+                fs = sorted(fs, key=lambda x: x.t)
+                for i in range(len(fs)):
+                    for j in range(i + 1, len(fs)):
+                        a, b = fs[i], fs[j]
+                        send, _r = self._temporal_gate(a, b)  # ① NLI前の時間ゲート
+                        if not send:
+                            continue
+                        nli_calls += 1
+                        if scorer(f"{subj}は{a.value}。", f"{subj}は{b.value}。") == "contradiction":
+                            qid = self.create_question(
+                                branch,
+                                "SOFT_CONTRADICTION",
+                                {
+                                    "subj": subj,
+                                    "a": [a.fid, a.t, a.value],
+                                    "b": [b.fid, b.t, b.value],
+                                    "q": f"「{subj}」: ch{a.t}「{a.value}」とch{b.t}「{b.value}」は両立するか?",
+                                },
+                            )
+                            soft_q.append(qid)
+        return {
+            "branch": branch,
+            "hard_violations": hard,
+            "nli_calls": nli_calls,
+            "soft_questions_created": soft_q,
+            "consistent": len(hard) == 0,
+        }
+
+    # ---------------- マージ ----------------
+    def _common_ancestor(self, b1, b2):
+        a1 = {o[0] for o in self._ancestors(self._head(b1))}
+        for o in reversed(self._ancestors(self._head(b2))):
+            if o[0] in a1:
+                return o[0]
+        return None
+
+    def _state_map(self, branch=None, op=None):
+        kb = self.materialize(branch, upto_op=op) if op is None else self._materialize_at(op)
+        return {(f.subj, f.attr): (f.fid, f.value) for f in kb.facts.values()}
+
+    def _materialize_at(self, op):
+        kb = NarrativeKB()
+        for oid, parent, op_type, payload, vf, author in self._ancestors(op):
+            self._apply(kb, op_type, payload, vf)
+        return kb
+
+    def merge(self, src, dst):
+        base_op = self._common_ancestor(src, dst)
+        base = (
+            {(f.subj, f.attr): (f.fid, f.value) for f in self._materialize_at(base_op).facts.values()}
+            if base_op
+            else {}
+        )
+        S = {(f.subj, f.attr): (f.fid, f.value) for f in self.materialize(src).facts.values()}
+        D = {(f.subj, f.attr): (f.fid, f.value) for f in self.materialize(dst).facts.values()}
+        auto = []
+        conflicts = []
+        for k in set(S) | set(D):
+            sv = S.get(k)
+            dv = D.get(k)
+            bv = base.get(k)
+            if sv == dv:
+                continue
+            s_ch = sv != bv
+            d_ch = dv != bv
+            if s_ch and not d_ch:
+                auto.append({"key": list(k), "take": "src", "value": sv[1]})
+            elif d_ch and not s_ch:
+                auto.append({"key": list(k), "take": "dst", "value": dv[1]})
+            elif s_ch and d_ch:
+                qid = self.create_question(
+                    dst,
+                    "MERGE_CONFLICT",
+                    {
+                        "subj": k[0],
+                        "attr": k[1],
+                        "base": bv[1] if bv else None,
+                        "src": sv[1] if sv else None,
+                        "dst": dv[1] if dv else None,
+                        "src_fid": sv[0] if sv else None,
+                        "dst_fid": dv[0] if dv else None,
+                        "q": f"「{k[0]}」の{k[1]}: src「{sv[1] if sv else '-'}」/ dst「{dv[1] if dv else '-'}」どちらを正史にするか?",
+                    },
+                )
+                conflicts.append({"key": list(k), "question_id": qid})
+        return {"base_op": base_op, "auto_merged": auto, "conflicts": conflicts}
+
+    # ---------------- ロールバック ----------------
+    def rollback(self, branch, to_op):
+        self.db.execute("UPDATE branches SET head_op=? WHERE name=?", (to_op, branch))
+        self.db.commit()
+        return {"branch": branch, "head_op": to_op, "note": "操作ログは不変(巻き戻しの巻き戻し可能)"}
+
+    # ---------------- 質問(作者oracleチャネル) ----------------
+    def create_question(self, branch, qtype, payload):
+        ts = self._tick()
+        cur = self.db.execute(
+            "INSERT INTO open_questions(branch,qtype,payload,created_ts) VALUES(?,?,?,?)",
+            (branch, qtype, json.dumps(payload, ensure_ascii=False), ts),
+        )
+        self.db.commit()
+        return cur.lastrowid
+
+    def list_questions(self, branch=None, status="open"):
+        q = "SELECT qid,branch,qtype,payload,status FROM open_questions WHERE status=?"
+        a = [status]
+        if branch:
+            q += " AND branch=?"
+            a.append(branch)
+        return [
+            {"qid": r[0], "branch": r[1], "type": r[2], **json.loads(r[3]), "status": r[4]}
+            for r in self.db.execute(q, a).fetchall()
+        ]
+
+    def answer_question(self, qid, answer):
+        r = self.db.execute("SELECT branch,qtype,payload,status FROM open_questions WHERE qid=?", (qid,)).fetchone()
+        if not r:
+            return {"error": f"question {qid} not found"}
+        branch, qtype, payload, status = r
+        p = json.loads(payload)
+        if status != "open":
+            return {"error": f"question {qid} already {status}"}
+        applied = None
+        if qtype == "ALIAS":
+            if answer in ("同一", "same", "yes"):
+                self._commit(branch, "merge_alias", {"from": p["a"], "to": p["b"]}, 0, "author")
+                applied = f"alias {p['a']}={p['b']}"
+            else:
+                self._commit(branch, "cannot_link", {"a": p["a"], "b": p["b"]}, 0, "author")
+                applied = f"cannot_link {p['a']}|{p['b']}"
+        elif qtype == "MERGE_CONFLICT":
+            if answer in ("src", "B案"):
+                keep = p["src"]
+            elif answer in ("dst", "A案"):
+                keep = p["dst"]
+            else:
+                keep = answer  # 値そのものを指定(別解)も可
+            # 統合先(dst)の事実を常に書き換える。dstに無ければ新規追加。
+            if p.get("dst_fid"):
+                self._commit(branch, "supersede", {"fid": p["dst_fid"], "value": keep}, 0, "author")
+            else:
+                nf = self._new_fid()
+                self._commit(
+                    branch,
+                    "add_fact",
+                    {"fid": nf, "subj": p["subj"], "attr": p["attr"], "value": keep, "kind": "STATE"},
+                    0,
+                    "author",
+                )
+            applied = f"{p['subj']}.{p['attr']}={keep}"
+        elif qtype == "SOFT_CONTRADICTION":
+            applied = "acknowledged (作者判断; 自動操作なし)"
+        ts = self._tick()
+        self.db.execute(
+            "UPDATE open_questions SET status='resolved',answer=?,resolved_ts=? WHERE qid=?",
+            (json.dumps(answer, ensure_ascii=False), ts, qid),
+        )
+        self.db.commit()
+        return {"qid": qid, "resolved": answer, "applied": applied}
+
+    # ---------------- 読取 ----------------
+    def get_state(self, branch="main", as_of_chapter=None, subject=None):
+        kb = self.materialize(branch, as_of_chapter)
+        fs = sorted(kb.facts.values(), key=lambda x: (x.t, x.fid))
+        if subject:
+            cs = kb._canon(subject)
+            fs = [f for f in fs if kb._canon(f.subj) == cs]
+        return {
+            "branch": branch,
+            "as_of_chapter": as_of_chapter,
+            "aliases": kb.aliases,
+            "facts": [
+                {
+                    "fid": f.fid,
+                    "subject": f.subj,
+                    "attribute": f.attr,
+                    "value": f.value,
+                    "chapter": f.t,
+                    "kind": f.kind,
+                    "num": f.num,
+                }
+                for f in fs
+            ],
+        }
+
+    def get_log(self, branch, limit=50):
+        bid = self._branch_id(branch)
+        rows = self.db.execute(
+            "SELECT op_id,op_type,payload,valid_from,author FROM operations WHERE branch_id=? ORDER BY op_id DESC LIMIT ?",
+            (bid, limit),
+        ).fetchall()
+        return [
+            {"op_id": o, "type": t, "payload": json.loads(p), "chapter": vf, "author": au} for o, t, p, vf, au in rows
+        ]
