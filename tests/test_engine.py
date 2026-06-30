@@ -25,6 +25,22 @@ def test_living_action_ok():
     assert kb._check_hard(f, kb._affected(f)) == []
 
 
+def test_rank_persists_after_death():
+    # RANK(地位/職業)は静的な経歴属性。死後も真で、forbid_after_state の対象外。
+    # 被害者を「死んでいる」と同章で「時計師だった」と書けること。
+    kb = _kb(Fact("d", "セバスチャン", "LIFE", "dead", 1))
+    f = Fact("r", "セバスチャン", "RANK", "時計師", 1)
+    assert kb._check_hard(f, kb._affected(f)) == []
+
+
+def test_location_after_death_still_forbidden():
+    # 位置(LOC)はfluent: 死者が後の章で移動するのは矛盾。過剰除去の回帰ガード。
+    kb = _kb(Fact("d", "セバスチャン", "LIFE", "dead", 1))
+    f = Fact("loc", "セバスチャン", "LOC", "酒場", 5)
+    viol = kb._check_hard(f, kb._affected(f))
+    assert any(t == "FORBID_AFTER_STATE" for (t, _c, _d) in viol)
+
+
 def test_monotone_counter_break():
     kb = _kb(Fact("c1", "死者帳", "LEDGER", "私的", 1, "COUNTER", num=11))
     f = Fact("c2", "死者帳", "LEDGER", "私的", 10, "COUNTER", num=9)

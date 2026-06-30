@@ -146,10 +146,11 @@ def default_constraints():
     return [
         {
             "template": "forbid_after_state",
-            "params": {"terminal_attr": "LIFE", "terminal_value": "dead", "forbidden_attrs": ["ACT", "LOC", "RANK"]},
+            "params": {"terminal_attr": "LIFE", "terminal_value": "dead", "forbidden_attrs": ["ACT", "LOC"]},
             "enabled": True,
             "scope": {},
-            "note": "死後の行為を禁止(EC慣性: 終了フルーエントの再開始禁止)",
+            "note": "死後の行為(ACT)・移動(LOC)を禁止(EC慣性: 終了フルーエントの再開始禁止)。"
+            "RANK(地位/職業)は静的な経歴属性=fluentでないため対象外(死後も真)。posthumous昇進を禁じたい作者は別途追加する。",
         },
         {
             "template": "monotone",
