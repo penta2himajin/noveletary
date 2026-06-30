@@ -145,6 +145,33 @@ def update_fact(branch: str, fid: str, new_value: str, num: int = None) -> dict:
 
 
 @mcp.tool()
+def retag_fact(
+    branch: str,
+    fid: str,
+    chapter: int = None,
+    attribute: str = None,
+    valid_to: int = None,
+    narrated_in: int = None,
+    value: str = None,
+    num: int = None,
+) -> dict:
+    """既存事実を同じ fid のまま付け替える(delete+re-add 不要)。指定しない項目(None)は据え置き。
+    用途: 章の移動(chapter)、属性の付け替え(attribute)、生前の経歴/居所を死で畳む(valid_to)、開示章の修正(narrated_in)。
+    retcon 同様に hard 再検査が走り、矛盾すれば status=rejected(retag) で適用しない。
+    注: valid_to/narrated_in を ∞/既定へ戻すのは不可(rare; delete_fact + add_fact で)。"""
+    return store.retag(
+        branch,
+        fid,
+        chapter=chapter,
+        attribute=attribute,
+        valid_to=valid_to,
+        narrated_in=narrated_in,
+        value=value,
+        num=num,
+    )
+
+
+@mcp.tool()
 def delete_fact(branch: str, fid: str) -> dict:
     """事実を削除。他factが依存していれば孤児化を防ぐため拒否。"""
     return store.delete(branch, fid)

@@ -129,6 +129,34 @@ def test_alias_question_deduped(s):
     assert len(qids) == 1  # 各 add は同じ qid を指す
 
 
+def test_retag_moves_chapter_keeping_fid(s):
+    # 章の付け替えを delete+re-add なしで(同じ fid のまま)
+    fid = s.add("main", "セバスチャン", "RANK", "時計師", 1)["fid"]
+    r = s.retag("main", fid, chapter=0)
+    assert r["status"] == "retagged"
+    f = s.get_state("main")["facts"][0]
+    assert f["fid"] == fid and f["chapter"] == 0
+
+
+def test_retag_rechecks_constraints(s):
+    # retag は retcon 同様に再検査が走る: 死後の章へ動かすと弾く
+    s.add("main", "X", "LIFE", "dead", 1)
+    fid = s.add("main", "X", "LOC", "工房", 0, valid_to=1)["fid"]  # [0,1) は ok
+    bad = s.retag("main", fid, chapter=5)  # 死後へ移動 = 矛盾
+    assert bad["status"].startswith("rejected")
+    loc = [f for f in s.get_state("main", subject="X")["facts"] if f["fid"] == fid][0]
+    assert loc["chapter"] == 0  # 元のまま(適用されない)
+
+
+def test_retag_can_bound_valid_to(s):
+    # 既存の開区間 fluent を死で畳む(valid_to を後付け)
+    s.add("main", "X", "LIFE", "dead", 1)
+    fid = s.add("main", "X", "LOC", "工房", 0)["fid"]  # [0,∞)
+    assert s.retag("main", fid, valid_to=1)["status"] == "retagged"
+    locs = [f for f in s.get_state("main", as_of_chapter=5, subject="X")["facts"] if f["attribute"] == "LOC"]
+    assert locs == []  # 第5章には LOC は無い(死で畳まれた)
+
+
 def test_assert_alias_merges_unrelated_names(s):
     # 表層が似ていない別名(偽名)を作者が明示統合できる
     s.add("main", "マイケル・コール", "STATE", "相続人", 3)

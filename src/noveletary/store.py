@@ -151,6 +151,20 @@ class Store:
                     narrated_in=o.narrated_in,
                     valid_to=o.valid_to,
                 )
+        elif op_type == "retag":
+            if p["fid"] in kb.facts:
+                o = kb.facts[p["fid"]]
+                kb.facts[p["fid"]] = Fact(
+                    o.fid,
+                    o.subj,
+                    p.get("attr", o.attr),
+                    p.get("value", o.value),
+                    p.get("t", o.t),
+                    o.kind,
+                    p.get("num", o.num),
+                    narrated_in=p.get("narrated_in", o.narrated_in),
+                    valid_to=p.get("valid_to", o.valid_to),
+                )
         elif op_type == "delete_fact":
             kb.facts.pop(p["fid"], None)
 
@@ -193,11 +207,7 @@ class Store:
                 s, a, v, t, k, nm = vals[:6]  # 旧snapshot(6要素)互換
                 ni = vals[6] if len(vals) > 6 else None  # narrated_in(7要素目)
                 vt = vals[7] if len(vals) > 7 else None  # valid_to(8要素目)
-                # スナップショット復元factにも時間スライスを適用(delta replayと同一規準)
-                if as_of_valid is not None and (
-                    (t is not None and t > as_of_valid) or (vt is not None and as_of_valid >= vt)
-                ):
-                    continue
+                # discourse(narrated)はスナップショット時点で確定済みなのでここでスライス
                 if as_of_narrated is not None:
                     nn = ni if ni is not None else t
                     if nn is not None and nn > as_of_narrated:
@@ -206,22 +216,17 @@ class Store:
             kb.aliases = snap["aliases"]
             kb.cannot_link = {frozenset(x) for x in snap["cl"]}
         for oid, parent, op_type, payload, vf, author in delta:
-            pj = None
-            if as_of_valid is not None:
-                if vf is not None and vf > as_of_valid:  # まだ真でない(開始>スライス点)
-                    continue
-                pj = json.loads(payload)
-                vt = pj.get("valid_to")  # 区間終了(排他)。旧op/構造opは欠落→∞
-                if vt is not None and as_of_valid >= vt:  # 既に終了している
-                    continue
+            # discourse-time スライス: 第N章までに語られた op だけ適用(narrated は op生成時に確定)
             if as_of_narrated is not None:
-                pj = pj if pj is not None else json.loads(payload)
-                n = pj.get("narrated_in")  # 旧op/構造opは欠落→valid_from(vf)で代替
+                n = json.loads(payload).get("narrated_in")  # 旧op/構造opは欠落→valid_from(vf)で代替
                 if n is None:
                     n = vf
                 if n is not None and n > as_of_narrated:
                     continue
             self._apply(kb, op_type, payload, vf)
+        # valid-time スライスは全op適用後に区間でポストフィルタ(retag/supersede等の補正もまず反映してから判定)
+        if as_of_valid is not None:
+            kb.facts = {fid: f for fid, f in kb.facts.items() if f.holds_at(as_of_valid)}
         kb.constraints = self.materialize_constraints(branch, upto_op)
         return kb
 
@@ -452,6 +457,58 @@ class Store:
             }
         op = self._commit(branch, "supersede", {"fid": fid, "value": new_value, "num": num}, old.t, author)
         return {"status": "superseded", "fid": fid, "op_id": op}
+
+    def retag(
+        self,
+        branch,
+        fid,
+        chapter=None,
+        attribute=None,
+        valid_to=None,
+        narrated_in=None,
+        value=None,
+        num=None,
+        author="author",
+    ):
+        """既存factの 章(chapter)/属性/区間終了(valid_to)/語り章(narrated_in)/値/num を、
+        同じ fid のまま付け替える(delete+re-add 不要)。None の項目は据え置き。
+        retcon 同様に hard 再検査が走り、矛盾すれば拒否(適用しない)。
+        注: valid_to/narrated_in を ∞/既定(None)へ戻すのはこの操作では不可(rare; delete+addで)。"""
+        kb = self.materialize(branch)
+        if fid not in kb.facts:
+            return {"error": f"fact {fid} not found"}
+        o = kb.facts[fid]
+        nf = Fact(
+            fid,
+            o.subj,
+            attribute or o.attr,
+            value if value is not None else o.value,
+            chapter if chapter is not None else o.t,
+            o.kind,
+            num if num is not None else o.num,
+            narrated_in=narrated_in if narrated_in is not None else o.narrated_in,
+            valid_to=valid_to if valid_to is not None else o.valid_to,
+        )
+        scope = [g for g in kb._affected(nf) if g.fid != fid]
+        viol = kb._check_hard(nf, scope)
+        if viol:
+            return {
+                "status": "rejected(retag)",
+                "conflict": [{"type": t, "facts": c, "detail": d} for (t, c, d) in viol],
+            }
+        payload = {"fid": fid}
+        for key, val in (
+            ("attr", attribute),
+            ("value", value),
+            ("t", chapter),
+            ("num", num),
+            ("narrated_in", narrated_in),
+            ("valid_to", valid_to),
+        ):
+            if val is not None:
+                payload[key] = val
+        op = self._commit(branch, "retag", payload, nf.t, author)
+        return {"status": "retagged", "fid": fid, "op_id": op}
 
     def delete(self, branch, fid):
         kb = self.materialize(branch)
