@@ -1,7 +1,8 @@
 """
 engine.py — 制約維持された物語知識ベース(最小実装)
 構築(add/update/delete)と検証(制約検査)を単一エンジンに統合。
-- ハード制約は書込時にmutationをgate(prevention)
+- ハード制約は書込時にmutationをgate(prevention)。規則はコード直書きでなく
+  constraints.py のテンプレート実行器に委譲(規則は store の操作ログでversioned)。
 - 未解決(ソフト)は LLM でなく「作者への質問」を発行(human-in-the-loop)
 - 検査は影響部分グラフのみ(差分検査, 全スキャンしない)
 """
@@ -9,7 +10,7 @@ engine.py — 制約維持された物語知識ベース(最小実装)
 from dataclasses import dataclass, field
 from typing import Optional
 
-from z3 import Int, Solver, unsat
+from . import constraints as _constraints
 
 
 @dataclass
@@ -36,6 +37,7 @@ class NarrativeKB:
         self.facts = {}  # fid -> Fact
         self.aliases = {}  # surface -> canonical
         self.cannot_link = set()  # frozenset({a,b})
+        self.constraints = []  # 有効な制約レコード(storeが materialize して差し込む)
         self.log = []
 
     # ---------- 影響部分グラフ(差分検査の肝) ----------
@@ -44,7 +46,7 @@ class NarrativeKB:
         out = []
         for g in self.facts.values():
             same_subj = self._canon(g.subj) == self._canon(f.subj)
-            same_series = g.attr == "LEDGER" and f.attr == "LEDGER" and g.value == f.value
+            same_series = g.attr == f.attr and g.value == f.value  # 任意attrの系列(monotone等)
             if same_subj or same_series:
                 out.append(g)
         return out
@@ -52,65 +54,13 @@ class NarrativeKB:
     def _canon(self, name):
         return self.aliases.get(name, name)
 
-    # ---------- ハード制約検査(影響部分グラフ上) ----------
-    def _check_hard(self, f: Fact, scope):
-        viol = []
-        cs = self._canon(f.subj)
-        # (1) use-after-free: 死亡後の行為/状態
-        deaths = [g for g in scope if g.attr == "LIFE" and g.value == "dead"]
-        if deaths:
-            td = min(g.t for g in deaths)
-            if f.attr in ("ACT", "LOC", "RANK") and f.t >= td:
-                viol.append(
-                    (
-                        "USE_AFTER_FREE",
-                        [g.fid for g in deaths if g.t == td] + [f.fid],
-                        f"{cs}: ch{td}死亡後 ch{f.t}で「{f.attr}={f.value}」",
-                    )
-                )
-        # 逆: 既存ACTより後に死亡を挿入しても、既存の未来ACTがあれば矛盾
-        if f.attr == "LIFE" and f.value == "dead":
-            future_acts = [g for g in scope if g.attr in ("ACT", "LOC", "RANK") and g.t >= f.t]
-            if future_acts:
-                viol.append(
-                    (
-                        "USE_AFTER_FREE",
-                        [f.fid] + [g.fid for g in future_acts],
-                        f"{cs}: ch{f.t}死亡だが ch{future_acts[0].t}に既存の行為あり",
-                    )
-                )
-        # (2) 台帳: 単調カウンタ / 保存則(数値)
-        if f.attr == "LEDGER" and f.num is not None:
-            same = [g for g in scope if g.attr == "LEDGER" and g.value == f.value and g.num is not None]
-            same_sorted = sorted(same + [f], key=lambda x: x.t)
-            if f.kind == "COUNTER":
-                for i in range(1, len(same_sorted)):
-                    if same_sorted[i].num < same_sorted[i - 1].num:
-                        viol.append(
-                            (
-                                "MONOTONE_BREAK",
-                                [same_sorted[i - 1].fid, same_sorted[i].fid],
-                                f"{f.value}: ch{same_sorted[i - 1].t}={same_sorted[i - 1].num} → ch{same_sorted[i].t}={same_sorted[i].num} (減少)",
-                            )
-                        )
-        # (3) 時間順序の循環(z3)
-        orders = [g for g in scope if g.attr == "ORDER"] + ([f] if f.attr == "ORDER" else [])
-        if f.attr == "ORDER" and orders:
-            s = Solver()
-            s.set(unsat_core=True)
-            vars = {}
-
-            def v(x):
-                if x not in vars:
-                    vars[x] = Int(f"t_{x}")
-                return vars[x]
-
-            for g in orders:
-                a, b = g.value.split("<")
-                s.assert_and_track(v(a) < v(b), g.fid)
-            if s.check() == unsat:
-                viol.append(("TEMPORAL_CYCLE", [str(c) for c in s.unsat_core()], "時間順序に循環"))
-        return viol
+    # ---------- ハード制約検査(制約テンプレート実行器に委譲) ----------
+    def _check_hard(self, f: Fact, scope, constraint_records=None):
+        """有効な制約レコードを実行する。規則はコードに直書きせず constraints.py の
+        テンプレート(forbid_after_state/monotone/acyclic/release)に params を渡して実行。
+        constraint_records 未指定なら self.constraints(storeが差し込む)を使う。"""
+        records = constraint_records if constraint_records is not None else self.constraints
+        return _constraints.check(f, scope, records)
 
     # ---------- ソフト未解決 → 作者質問 ----------
     def _soft_questions(self, f: Fact):
