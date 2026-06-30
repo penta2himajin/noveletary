@@ -5,15 +5,18 @@ extract.py のGiNZA+鎖heuristic(ゼロ主語回復14%天井)を、
 KWJAの述語項構造解析(ゼロ照応解決済み, PAS F≈77 / coref≈79)で置換する。
 extract.extract() と同じ候補形式を返すので reconcile_facts にそのまま差し込める。
 
-【現状】京大配信サーバ lotus.kuee.kyoto-u.ac.jp が503のため未実走。
-       サーバ復活後 `pip install kwja rhoknp` 済み環境でそのまま動く。
-       軽量構成: model_size=base, tasks=char,word (typo/seq2seqは不要)。
+実証(実章ch2の実文): モロー死亡のゼロ主語(LIFE=dead)を解決、テ形連鎖の落ちた
+主語(ハル←落とす/上げる)も補完。新規実体(ハル/モロー)でドメインシフトに耐える。
+無生物・存在主語(被覆/索/痕など)も拾うが、reconcile の既知実体フィルタ+状態系限定で除外される。
 
-KWJAのゼロ照応はガ格の項を以下の型で返す:
-  - 直接   : 文中に明示された項
-  - ゼロ照応: 省略された項を文脈中の先行詞に解決(←GiNZAが落としていた本命)
-  - 著者   : 一人称/語り手(POV)。物語ではPOVキャラ(例:ハル)に対応
-  - 読者/不特定: 二人称/総称
+軽量構成: model_size=base, tasks=char,word (typo/seq2seqは不要)。
+チェックポイントは ~/.cache/kwja/<ver>/ に配置(char_/word_ deberta-v2-base)。
+メモリ: char+word 同時ロードは数GB必要。低RAM環境では --word-batch-size 1 か文単位処理。
+
+KWJAのガ格(主語)解決の型(rhoknp ArgumentType):
+  - CASE_EXPLICIT      : 文中に明示(直接)
+  - OMISSION/CASE_HIDDEN: 省略主語を文脈中の先行詞に解決(←GiNZAが落としていた本命=ゼロ照応)
+  - EXOPHORA           : 外界照応(著者=語り手/POV, 読者, 不特定:人 など)
 """
 
 import re
@@ -29,7 +32,6 @@ def _get_kwja(model_size="base"):
     if _kwja is None:
         from rhoknp import KWJA
 
-        # char,word のみ(typo/seq2seq不要)。baseで精度/軽さの最適点。
         _kwja = KWJA(options=["--tasks", "char,word", "--model-size", model_size, "--device", "cpu"])
     return _kwja
 
@@ -38,8 +40,25 @@ def _classify(pred_lemma):
     if _DEATH.search(pred_lemma):
         return "LIFE", "dead"
     if _MOVE.search(pred_lemma):
-        return "LOC", None  # 値はニ/ヘ格(landmark)で埋める
+        return "LOC", None  # 値はニ格(行先)で埋める
     return "ACT", pred_lemma
+
+
+def _arg_subject(arg, pov_character):
+    """ガ格引数 → (subject, zero_resolution)。"""
+    tname = type(arg).__name__
+    atype = getattr(arg, "type", None)
+    aname = atype.name if atype is not None else ""
+    if tname == "ExophoraArgument":
+        ref = str(getattr(arg, "exophora_referent", "") or "")
+        if "著者" in ref:
+            return (pov_character or "(著者/POV)"), "著者→POV"
+        return f"(外界:{ref})", "外界照応"
+    # EndophoraArgument
+    head = arg.base_phrase.head.lemma
+    if aname in ("OMISSION", "CASE_HIDDEN"):
+        return head, "ゼロ照応"  # ←回復した省略主語
+    return head, "直接"
 
 
 def extract_kwja(text, chapter, pov_character=None, model_size="base"):
@@ -50,40 +69,32 @@ def extract_kwja(text, chapter, pov_character=None, model_size="base"):
     cands = []
     for sent in doc.sentences:
         for bp in sent.base_phrases:
-            pas = getattr(bp, "pas", None)
-            if pas is None or pas.predicate is None:
+            if "用言" not in bp.features:  # 述語(用言)のみ
                 continue
-            pred_lemma = (
-                pas.predicate.base_phrase.head.lemma if hasattr(pas.predicate, "base_phrase") else bp.head.lemma
-            )
-            # ガ格(主語)
-            ga_args = pas.get_arguments("ガ", relax=False)
-            subject = None
-            ztype = "直接"
-            if ga_args:
-                arg = ga_args[0]
-                atype = getattr(arg, "type", None)
-                aname = type(arg).__name__
-                if "Exophora" in aname or getattr(arg, "exophora_referent", None) is not None:
-                    ref = str(getattr(arg, "exophora_referent", "") or arg)
-                    if "著者" in ref:
-                        subject = pov_character or "(著者/POV)"
-                        ztype = "著者→POV"
-                    else:
-                        subject = f"(外界:{ref})"
-                        ztype = "外界照応"
-                else:
-                    subject = arg.base_phrase.head.lemma if getattr(arg, "base_phrase", None) else str(arg)
-                    # 直接かゼロ照応か(rhoknpのargには直接/間接の区別がある)
-                    ztype = "ゼロ照応" if getattr(arg, "is_zero", False) or atype == "omission" else "直接"
-            # ヲ/ニ格
-            wo = pas.get_arguments("ヲ", relax=False)
+            pas = bp.pas
+            pred_lemma = bp.head.lemma
+            ga = pas.get_arguments("ガ", relax=False)
+            subject, ztype = (None, "なし")
+            if ga:
+                subject, ztype = _arg_subject(ga[0], pov_character)
             ni = pas.get_arguments("ニ", relax=False)
+            wo = pas.get_arguments("ヲ", relax=False)
             attr, val = _classify(pred_lemma)
-            if attr == "LOC" and ni:
-                val = ni[0].base_phrase.head.lemma if getattr(ni[0], "base_phrase", None) else str(ni[0])
+            if attr == "LOC":
+                # 行先(ニ格 endophora)を値に
+                for a in ni:
+                    if type(a).__name__ == "EndophoraArgument":
+                        val = a.base_phrase.head.lemma
+                        break
+                if val is None:
+                    val = pred_lemma
             elif attr == "ACT":
                 val = pred_lemma
+            obj = None
+            for a in wo:
+                if type(a).__name__ == "EndophoraArgument":
+                    obj = a.base_phrase.head.lemma
+                    break
             cands.append(
                 {
                     "subject": subject,
@@ -91,8 +102,8 @@ def extract_kwja(text, chapter, pov_character=None, model_size="base"):
                     "value": val,
                     "chapter": chapter,
                     "zero_subject": subject is None,
-                    "zero_resolution": ztype,  # ←KWJAがどう主語を埋めたか(直接/ゼロ照応/著者→POV)
-                    "object": (wo[0].base_phrase.head.lemma if wo and getattr(wo[0], "base_phrase", None) else None),
+                    "zero_resolution": ztype,  # 直接 / ゼロ照応 / 著者→POV / 外界照応
+                    "object": obj,
                     "provenance": sent.text.strip()[:60],
                 }
             )
@@ -104,12 +115,9 @@ def extract_kwja(text, chapter, pov_character=None, model_size="base"):
     }
 
 
-# reconcile は extract.reconcile をそのまま利用可能(候補形式が同一)。
-# 置換は extract_facts/reconcile_facts ツール内の extract() を extract_kwja() に差し替えるだけ。
 if __name__ == "__main__":
+    import json
     import sys
 
     txt = sys.stdin.read() if not sys.stdin.isatty() else "モローは撃たれて死んだ。ハルは港へ向かった。"
-    import json
-
     print(json.dumps(extract_kwja(txt, 1, pov_character="ハル"), ensure_ascii=False, indent=2))
