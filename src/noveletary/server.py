@@ -92,6 +92,35 @@ def get_state(branch: str = "main", as_of_chapter: int = None, subject: str = No
 
 
 @mcp.tool()
+def chapter_brief(branch: str = "main", chapter: int = 1) -> dict:
+    """第N章を書く前に要る正準を1発で束ねる(想起負担の軽減)。返り値:
+    characters(その章時点の各主体の生死alive/地位RANK/位置LOC/呼称) / constraints(有効なhard制約) /
+    open_questions(未解決) / open_setups(未回収の伏線; payoff_by超過は overdue) / recent(直近[N-2,N]の行為・順序・生死)。
+    執筆ループの先頭で呼ぶと、get_state を何度も引かずに文脈を再構成できる。"""
+    return store.chapter_brief(branch, chapter)
+
+
+@mcp.tool()
+def add_setup(branch: str, setup: str, chapter: int, payoff_by: int = None, thread: str = "伏線") -> dict:
+    """伏線(チェーホフの銃)を登録して未回収を追跡する。setup=仕込みの説明, chapter=仕込んだ(語った)章,
+    payoff_by=回収すべき期限の章(任意; 超過すると chapter_brief/open_setups で overdue 表示), thread=伏線の識別名。
+    回収したら resolve_setup で閉じる。100章規模で「張ったが回収し忘れ」を防ぐ台帳。"""
+    return store.add_setup(branch, setup, chapter, payoff_by=payoff_by, subject=thread)
+
+
+@mcp.tool()
+def resolve_setup(branch: str, fid: str) -> dict:
+    """伏線を回収済みにする(現在の未回収一覧から外す。操作ログは不変なので履歴は残る)。fid は open_setups の値。"""
+    return store.resolve_setup(branch, fid)
+
+
+@mcp.tool()
+def open_setups(branch: str = "main", as_of_chapter: int = None) -> dict:
+    """未回収の伏線一覧。as_of_chapter を渡すと payoff_by 超過分を overdue=True で示す。"""
+    return {"branch": branch, "open_setups": store.open_setups(branch, as_of_chapter)}
+
+
+@mcp.tool()
 def get_log(branch: str = "main", limit: int = 50) -> dict:
     """ブランチの操作履歴(新しい順)。op_id はロールバック先の指定に使える。"""
     return {"branch": branch, "log": store.get_log(branch, limit)}

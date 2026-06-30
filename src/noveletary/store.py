@@ -795,6 +795,73 @@ class Store:
             ],
         }
 
+    # ---------------- 伏線(SETUP)と章ブリーフ ----------------
+    def add_setup(self, branch, setup, chapter, payoff_by=None, subject="伏線", author="author"):
+        """未回収にしたくない伏線(チェーホフの銃)を登録。attribute=SETUP の fact として持つ。
+        payoff_by に回収期限の章を入れると open_setups で超過を overdue 表示。回収は resolve_setup(=delete)。"""
+        return self.add(
+            branch, subject, "SETUP", setup, chapter, kind="STATE", num=payoff_by, gate=False, author=author
+        )
+
+    def resolve_setup(self, branch, fid):
+        """伏線を回収済みにする(delete=現在状態から外す。操作ログは不変なので履歴は残る)。"""
+        return self.delete(branch, fid)
+
+    def open_setups(self, branch, as_of_chapter=None):
+        """未回収の伏線(現在状態に残る SETUP fact)。payoff_by(num) を過ぎていれば overdue。"""
+        kb = self.materialize(branch)
+        out = []
+        for f in kb.facts.values():
+            if f.attr != "SETUP":
+                continue
+            overdue = as_of_chapter is not None and f.num is not None and f.num < as_of_chapter
+            out.append(
+                {
+                    "fid": f.fid,
+                    "thread": f.subj,
+                    "setup": f.value,
+                    "narrated_in": f.narrated,
+                    "payoff_by": f.num,
+                    "overdue": overdue,
+                }
+            )
+        return sorted(out, key=lambda x: (x["payoff_by"] is None, x["payoff_by"] or 0))
+
+    def chapter_brief(self, branch, chapter):
+        """第N章を書く前に要る正準を1発で束ねる(想起負担の軽減)。as_of_chapter=N の世界で:
+        characters(各主体の生死/地位/位置/呼称) / constraints(有効制約) / open_questions /
+        open_setups(未回収伏線・overdue付) / recent(直近[N-2,N]の出来事)。"""
+        kb = self.materialize(branch, as_of_valid=chapter)
+        from collections import defaultdict
+
+        attrs_of = defaultdict(dict)
+        dead = set()
+        recent = []
+        for f in sorted(kb.facts.values(), key=lambda x: (x.t, x.fid)):
+            if f.attr == "SETUP":
+                continue
+            cs = kb._canon(f.subj)
+            if f.attr == "LIFE" and f.value == "dead":
+                dead.add(cs)
+            if f.attr in ("LIFE", "RANK", "LOC", "STATE", "呼称"):
+                attrs_of[cs][f.attr] = f.value
+            if f.t >= chapter - 2 and f.attr in ("ACT", "ORDER", "LIFE"):
+                recent.append({"subject": f.subj, "attribute": f.attr, "value": f.value, "chapter": f.t})
+        characters = [{"subject": s, "alive": s not in dead, **a} for s, a in sorted(attrs_of.items())]
+        constraints = [
+            {"cid": c["cid"], "template": c["template"], "note": c.get("note", "")}
+            for c in self.materialize_constraints(branch)
+        ]
+        return {
+            "branch": branch,
+            "chapter": chapter,
+            "characters": characters,
+            "constraints": constraints,
+            "open_questions": self.list_questions(branch),
+            "open_setups": self.open_setups(branch, as_of_chapter=chapter),
+            "recent": recent,
+        }
+
     def get_log(self, branch, limit=50):
         bid = self._branch_id(branch)
         rows = self.db.execute(

@@ -209,6 +209,32 @@ def test_assert_distinct_suppresses_alias_question(s):
     assert "question_id" not in r
 
 
+def test_open_setups_overdue_and_resolve(s):
+    fid = s.add_setup("main", "時計のゼンマイに伏線", chapter=2, payoff_by=5)["fid"]
+    s.add_setup("main", "灰色の紳士の正体", chapter=2)  # 期限なし
+    opn = s.open_setups("main", as_of_chapter=7)
+    assert {o["setup"] for o in opn} == {"時計のゼンマイに伏線", "灰色の紳士の正体"}
+    assert next(o for o in opn if o["payoff_by"] == 5)["overdue"] is True  # 第7章時点で期限超過
+    s.resolve_setup("main", fid)  # 回収
+    assert {o["setup"] for o in s.open_setups("main")} == {"灰色の紳士の正体"}
+
+
+def test_chapter_brief_assembles_context(s):
+    s.add("main", "ハル", "RANK", "潜水士", 1)
+    s.add("main", "ハル", "LOC", "港", 1)
+    s.add("main", "モロー", "RANK", "社長", 1)
+    s.add("main", "モロー", "LIFE", "dead", 3)  # 第3章で死亡
+    s.add("main", "ハル", "ACT", "出航", 4, kind="EVENT")
+    s.add_setup("main", "未回収の手紙", chapter=2, payoff_by=4)
+    b = s.chapter_brief("main", 5)
+    chars = {c["subject"]: c for c in b["characters"]}
+    assert chars["ハル"]["alive"] is True and chars["ハル"]["RANK"] == "潜水士"
+    assert chars["モロー"]["alive"] is False  # 第5章時点では故人
+    assert any(c["template"] == "forbid_after_state" for c in b["constraints"])
+    assert any(o["setup"] == "未回収の手紙" and o["overdue"] for o in b["open_setups"])  # 期限4<5
+    assert any(r["value"] == "出航" for r in b["recent"])  # 直近[3,5]の行為
+
+
 def test_add_many_atomic_rolls_back_on_reject(s):
     # 2件目が矛盾 → atomic ならバッチ全体を巻き戻し、何も適用しない
     facts = [
