@@ -118,7 +118,10 @@ def add_fact(
     narrated_in は discourse-time(語りの章)=原稿のどの章で開示されるか。未指定なら chapter と同値(順送り)。
       回想/倒叙で「物語内は過去・語りは後」を表す。例: chapter=1, narrated_in=10(第10章で明かす第1章の真実)。
     矛盾(死後の行為・台帳の減少・時間循環等)があれば status=rejected と矛盾fact集合を返す。
-    別名の疑い等が生じると question_id を返す(list_open_questions で確認)。"""
+    別名の疑い(ALIAS質問)は、subject が既存主体と表層的に近い時に自動発火する
+    (判定: 文字集合のJaccard類似度 ≥ 0.3)。同一ペアの未解決質問は1つに集約(重複しない)。
+    発火すると question_id を返す(list_open_questions→answer_question)。
+    先回りするなら assert_distinct(別人と固定) / assert_alias(同一と固定) を使う。"""
     return store.add(
         branch, subject, attribute, value, chapter, kind, num, gate=True, narrated_in=narrated_in, valid_to=valid_to
     )
@@ -182,7 +185,10 @@ def merge_branches(src: str, dst: str) -> dict:
 # ===================== 質問(作者oracleチャネル) =====================
 @mcp.tool()
 def list_open_questions(branch: str = None, status: str = "open") -> dict:
-    """未解決の質問を列挙する。種別: ALIAS(別名同一性) / MERGE_CONFLICT(マージ競合) / SOFT_CONTRADICTION(意味的矛盾の要確認)。
+    """未解決の質問を列挙する。種別と発火条件:
+    - ALIAS(別名同一性): add系で新subjectが既存主体と表層的に近い時(文字集合Jaccard類似度 ≥ 0.3)に自動発火。同一ペアは集約(重複しない)。
+    - MERGE_CONFLICT(マージ競合): merge_branches で両ブランチが同一(subj,attr)を別値にした時。
+    - SOFT_CONTRADICTION(意味的矛盾の要確認): audit(include_soft=True) のNLIが contradiction 判定した時(モデル未導入ならskip)。
     LLMは推測で解決せず、これを作者に提示して answer_question に回す。"""
     return {"questions": store.list_questions(branch, status)}
 
