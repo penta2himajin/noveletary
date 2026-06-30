@@ -1,0 +1,2 @@
+# SQLite operation log (data/narrative.db) is persisted here when the server runs.
+# This .gitkeep keeps the directory present in a fresh clone.
