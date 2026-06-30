@@ -14,7 +14,7 @@ def test_add_gate_use_after_free(s):
     s.add("main", "ハル", "ACT", "出航", 6, kind="EVENT")
     r = s.add("main", "ハル", "LIFE", "dead", 5)
     assert r["status"] == "rejected"
-    assert any(c["type"] == "USE_AFTER_FREE" for c in r["conflict"])
+    assert any(c["type"] == "FORBID_AFTER_STATE" for c in r["conflict"])
 
 
 def test_add_commits_clean(s):
@@ -32,7 +32,7 @@ def test_import_does_not_gate_but_audit_finds(s):
     )
     a = s.audit("main")
     assert a["consistent"] is False
-    assert any(v["type"] == "USE_AFTER_FREE" for v in a["hard_violations"])
+    assert any(v["type"] == "FORBID_AFTER_STATE" for v in a["hard_violations"])
 
 
 def test_bitemporal_slice(s):
