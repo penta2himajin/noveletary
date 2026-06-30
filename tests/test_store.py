@@ -225,11 +225,14 @@ def test_chapter_brief_assembles_context(s):
     s.add("main", "モロー", "RANK", "社長", 1)
     s.add("main", "モロー", "LIFE", "dead", 3)  # 第3章で死亡
     s.add("main", "ハル", "ACT", "出航", 4, kind="EVENT")
+    s.add("main", "テネブラエ港", "STATE", "辺境の宙港", 1)  # 世界・設定(STATEのみ)
     s.add_setup("main", "未回収の手紙", chapter=2, payoff_by=4)
     b = s.chapter_brief("main", 5)
     chars = {c["subject"]: c for c in b["characters"]}
     assert chars["ハル"]["alive"] is True and chars["ハル"]["RANK"] == "潜水士"
     assert chars["モロー"]["alive"] is False  # 第5章時点では故人
+    world = {w["subject"] for w in b["world"]}
+    assert "テネブラエ港" in world and "ハル" not in world  # 人物と世界が分離
     assert any(c["template"] == "forbid_after_state" for c in b["constraints"])
     assert any(o["setup"] == "未回収の手紙" and o["overdue"] for o in b["open_setups"])  # 期限4<5
     assert any(r["value"] == "出航" for r in b["recent"])  # 直近[3,5]の行為

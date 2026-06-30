@@ -847,7 +847,13 @@ class Store:
                 attrs_of[cs][f.attr] = f.value
             if f.t >= chapter - 2 and f.attr in ("ACT", "ORDER", "LIFE"):
                 recent.append({"subject": f.subj, "attribute": f.attr, "value": f.value, "chapter": f.t})
-        characters = [{"subject": s, "alive": s not in dead, **a} for s, a in sorted(attrs_of.items())]
+        # 人物(LIFE/RANK を持つ=動く実体) と 世界・設定(STATEのみ) を分ける
+        characters, world = [], []
+        for s, a in sorted(attrs_of.items()):
+            if "LIFE" in a or "RANK" in a:
+                characters.append({"subject": s, "alive": s not in dead, **a})
+            else:
+                world.append({"subject": s, **a})
         constraints = [
             {"cid": c["cid"], "template": c["template"], "note": c.get("note", "")}
             for c in self.materialize_constraints(branch)
@@ -856,6 +862,7 @@ class Store:
             "branch": branch,
             "chapter": chapter,
             "characters": characters,
+            "world": world,
             "constraints": constraints,
             "open_questions": self.list_questions(branch),
             "open_setups": self.open_setups(branch, as_of_chapter=chapter),

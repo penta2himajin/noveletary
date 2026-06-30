@@ -94,7 +94,7 @@ def get_state(branch: str = "main", as_of_chapter: int = None, subject: str = No
 @mcp.tool()
 def chapter_brief(branch: str = "main", chapter: int = 1) -> dict:
     """第N章を書く前に要る正準を1発で束ねる(想起負担の軽減)。返り値:
-    characters(その章時点の各主体の生死alive/地位RANK/位置LOC/呼称) / constraints(有効なhard制約) /
+    characters(LIFE/RANKを持つ人物の生死alive/地位/位置/呼称) / world(STATEのみの世界・設定) / constraints(有効なhard制約) /
     open_questions(未解決) / open_setups(未回収の伏線; payoff_by超過は overdue) / recent(直近[N-2,N]の行為・順序・生死)。
     執筆ループの先頭で呼ぶと、get_state を何度も引かずに文脈を再構成できる。"""
     return store.chapter_brief(branch, chapter)
