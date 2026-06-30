@@ -1,10 +1,12 @@
 """制約エンジン(hard制約)のテスト。NLP依存なし。"""
 
 from noveletary import Fact, NarrativeKB
+from noveletary.constraints import default_constraints
 
 
 def _kb(*facts):
     kb = NarrativeKB()
+    kb.constraints = default_constraints()
     for f in facts:
         kb.facts[f.fid] = f
     return kb
@@ -14,7 +16,7 @@ def test_use_after_free_detected():
     kb = _kb(Fact("d", "ハル", "LIFE", "dead", 5))
     f = Fact("a", "ハル", "ACT", "出航", 6, "EVENT")
     viol = kb._check_hard(f, kb._affected(f))
-    assert any(t == "USE_AFTER_FREE" for (t, _c, _d) in viol)
+    assert any(t == "FORBID_AFTER_STATE" for (t, _c, _d) in viol)
 
 
 def test_living_action_ok():
