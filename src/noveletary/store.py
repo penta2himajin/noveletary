@@ -3,11 +3,12 @@ store.py — 制約維持された物語KB + 物語ブランチ + 永続化(SQLi
 MCPサーバーの中核。engine(制約エンジン)を操作ログ/ブランチ層で包む。
 
 設計:
-- operations: 不変・append-only。唯一の真実の源。
+- operations: 不変・append-only。唯一の真実の源。事実・別名・制約の全変更がここに乗る。
 - branches : head_op を指すポインタ。分岐=1行。
 - open_questions: 未解決(alias/競合/意味矛盾)を永続化。作者oracleが答える。
 - 状態は materialize(replay)で導出。snapshotで高速化。
 - add は hard制約で gate(prevention) / import は gateせず後で audit(detection)。
+- 制約(hard規則)もデータ。操作ログで versioned され、ブランチ単位で分岐・ロールバックする。
 """
 
 import json
@@ -15,6 +16,7 @@ import os
 import sqlite3
 import uuid
 
+from .constraints import TEMPLATES, default_constraints
 from .engine import Fact, NarrativeKB
 
 
@@ -28,6 +30,8 @@ class Store:
         self._init_schema()
         if new and self._branch_id("main") is None:
             self._insert_branch("main", None, None)
+            for c in default_constraints():  # 削除可能なデフォルト制約を種として投入(EC慣性等)
+                self._commit("main", "add_constraint", {"cid": self._new_cid(), **c}, 0, "seed")
 
     # ---------------- schema ----------------
     def _init_schema(self):
@@ -168,11 +172,60 @@ class Store:
             if as_of_valid is not None and vf is not None and vf > as_of_valid:
                 continue
             self._apply(kb, op_type, payload, vf)
+        kb.constraints = self.materialize_constraints(branch, upto_op)
         return kb
 
     # ---------------- 自動ID ----------------
     def _new_fid(self):
         return "fct_" + uuid.uuid4().hex[:8]
+
+    def _new_cid(self):
+        return "con_" + uuid.uuid4().hex[:8]
+
+    # ---------------- 制約(操作ログでversioned) ----------------
+    def materialize_constraints(self, branch, upto_op=None):
+        """ブランチ系譜の制約操作を再生し、有効な制約レコード集合を返す。"""
+        head = upto_op if upto_op is not None else self._head(branch)
+        if head is None:
+            return []
+        cmap = {}
+        for _oid, _parent, op_type, payload, _vf, _author in self._ancestors(head):
+            if op_type == "add_constraint":
+                p = json.loads(payload)
+                cmap[p["cid"]] = p
+            elif op_type == "set_constraint":
+                p = json.loads(payload)
+                if p["cid"] in cmap:
+                    cmap[p["cid"]]["enabled"] = p["enabled"]
+            elif op_type == "remove_constraint":
+                p = json.loads(payload)
+                cmap.pop(p["cid"], None)
+        return list(cmap.values())
+
+    def list_constraints(self, branch):
+        return self.materialize_constraints(branch)
+
+    def add_constraint(self, branch, template, params, scope=None, note="", enabled=True):
+        if template not in TEMPLATES and template != "release":
+            return {"error": f"unknown template '{template}'. choices: {sorted(TEMPLATES) + ['release']}"}
+        cid = self._new_cid()
+        rec = {"cid": cid, "template": template, "params": params, "scope": scope or {}, "note": note, "enabled": enabled}
+        op = self._commit(branch, "add_constraint", rec, 0)
+        return {"status": "added", "cid": cid, "op_id": op, "constraint": rec}
+
+    def set_constraint_enabled(self, branch, cid, enabled):
+        cur = {c["cid"] for c in self.materialize_constraints(branch)}
+        if cid not in cur:
+            return {"error": f"constraint {cid} not found on '{branch}'"}
+        op = self._commit(branch, "set_constraint", {"cid": cid, "enabled": enabled}, 0)
+        return {"status": "enabled" if enabled else "disabled", "cid": cid, "op_id": op}
+
+    def remove_constraint(self, branch, cid):
+        cur = {c["cid"] for c in self.materialize_constraints(branch)}
+        if cid not in cur:
+            return {"error": f"constraint {cid} not found on '{branch}'"}
+        op = self._commit(branch, "remove_constraint", {"cid": cid}, 0)
+        return {"status": "removed", "cid": cid, "op_id": op, "note": "操作ログは不変(ロールバックで復活可)"}
 
     # ---------------- 構築: add (gate付き) ----------------
     def add(self, branch, subject, attribute, value, chapter, kind="STATE", num=None, gate=True, author="author"):
@@ -281,6 +334,7 @@ class Store:
         seen = NarrativeKB()
         seen.aliases = kb.aliases
         seen.cannot_link = kb.cannot_link
+        seen.constraints = kb.constraints
         for f in sorted(kb.facts.values(), key=lambda x: (x.t, x.fid)):
             scope = seen._affected(f)
             v = seen._check_hard(f, scope)
