@@ -1,0 +1,52 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "noveletary"
+version = "0.1.0"
+description = "novel + secretary: a constraint-maintained narrative knowledge base and MCP server for fiction consistency checking"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Kenya (penta2himajin)" }]
+requires-python = ">=3.10"
+keywords = ["mcp", "nlp", "japanese", "fiction", "consistency", "knowledge-base"]
+dependencies = [
+  "mcp>=1.2.0",
+  "z3-solver>=4.12",
+]
+
+[project.optional-dependencies]
+# 抽出/照合に使う日本語NLP。重く外部サーバ依存(KWJAの京大配信)があるため分離。
+nlp = [
+  "ginza>=5.2",
+  "ja-ginza>=5.2",
+  "kwja>=2.5",
+  "rhoknp>=1.6",
+  "transformers>=4.50,<4.51",
+  "huggingface_hub>=0.26,<0.31",
+  "torch>=2.0",
+]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.6",
+  "mypy>=1.8",
+]
+
+[project.scripts]
+noveletary-mcp = "noveletary.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/noveletary"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]
