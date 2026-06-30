@@ -63,6 +63,7 @@ monotone ledger / acyclic order). It is a generated artifact — not committed (
 - Hard constraints gate construction; soft/semantic checks never gate — they create author questions.
 - Hard constraints are **data, not code**: `constraints.py` holds work-agnostic templates; the work-specific instances (params) live in the op-log, are versioned per branch, and are author-operable (add/disable/remove). Defaults are seeded as deletable data, not privileged. Templates are EC-grounded (forbid_after_state = inertia/state-constraint; release = EC Release for per-branch resurrection).
 - Every new contradiction type ships with a test that plants the contradiction and asserts it fires.
+- Facts are **bi-temporal-in-progress**: `chapter` is valid-time (when a fact is true in the story world; a fluent holds over `[chapter, ∞)`), `narrated_in` is discourse-time (which chapter reveals it; defaults to `chapter`), and the op-log `op_id` is transaction-time. Hard constraints judge on **valid-time**; `get_state` slices by either axis (`as_of_chapter` = world state, `as_of_narrated` = reader knowledge). Phase B will make valid-time an explicit interval (`valid_to`); keep new temporal data in the op payload (JSON) so old ops replay under defaults — no destructive migration.
 
 ## Architectural Boundaries
 

@@ -82,11 +82,13 @@ def rollback_branch(branch: str, to_op: int) -> dict:
 
 # ===================== 読取(書く前に呼ぶ) =====================
 @mcp.tool()
-def get_state(branch: str = "main", as_of_chapter: int = None, subject: str = None) -> dict:
-    """ブランチで現在有効な事実を返す。
-    as_of_chapter を指定すると「その章時点の世界」に時間スライス(retcon後でも正しい)。
+def get_state(branch: str = "main", as_of_chapter: int = None, subject: str = None, as_of_narrated: int = None) -> dict:
+    """ブランチで現在有効な事実を返す。各factは chapter(=valid-time/物語内時間)と narrated_in(=discourse-time/語りの章)を持つ。
+    as_of_chapter: valid-time スライス=「その章時点の世界」(retcon後でも正しい)。
+    as_of_narrated: discourse-time スライス=「第N章まで読んだ読者が知っている事実」(伏線/叙述トリックの検証用)。
+      両者は独立軸。回想(物語内は過去・語りは後の章)は chapter と narrated_in が食い違う。
     subject を指定すると特定エンティティだけに絞る(文脈節約)。章を書く前の状態確認に使う。"""
-    return store.get_state(branch, as_of_chapter, subject)
+    return store.get_state(branch, as_of_chapter, subject, as_of_narrated=as_of_narrated)
 
 
 @mcp.tool()
@@ -98,19 +100,30 @@ def get_log(branch: str = "main", limit: int = 50) -> dict:
 # ===================== 構築(執筆) =====================
 @mcp.tool()
 def add_fact(
-    branch: str, subject: str, attribute: str, value: str, chapter: int, kind: str = "STATE", num: int = None
+    branch: str,
+    subject: str,
+    attribute: str,
+    value: str,
+    chapter: int,
+    kind: str = "STATE",
+    num: int = None,
+    narrated_in: int = None,
 ) -> dict:
     """事実を1件登録(hard制約でgate)。0から執筆する時の基本操作。
     attribute例: LIFE(生死: value=alive/dead) / ACT(行為) / LOC(位置) / RANK(地位) / LEDGER(台帳: numに数値, kind=COUNTER) / ORDER(時間順序: value='A<B') / STATE(一般)。
+    chapter は valid-time(物語内時間)=その事実が世界で真になる章。フルーエントは [chapter, ∞) で保持。制約検査はこの軸で行う。
+    narrated_in は discourse-time(語りの章)=原稿のどの章で開示されるか。未指定なら chapter と同値(順送り)。
+      回想/倒叙で「物語内は過去・語りは後」を表す。例: chapter=1, narrated_in=10(第10章で明かす第1章の真実)。
     矛盾(死後の行為・台帳の減少・時間循環等)があれば status=rejected と矛盾fact集合を返す。
     別名の疑い等が生じると question_id を返す(list_open_questions で確認)。"""
-    return store.add(branch, subject, attribute, value, chapter, kind, num, gate=True)
+    return store.add(branch, subject, attribute, value, chapter, kind, num, gate=True, narrated_in=narrated_in)
 
 
 @mcp.tool()
 def add_facts(branch: str, facts: list, atomic: bool = False) -> dict:
     """複数の事実をまとめて登録(各々hard制約でgate)。1シーン分の事実を一括投入する時に。
-    facts は [{subject, attribute, value, chapter, kind?, num?}, ...]。
+    facts は [{subject, attribute, value, chapter, kind?, num?, narrated_in?}, ...]。
+    chapter=valid-time(物語内時間), narrated_in=discourse-time(語りの章, 未指定なら chapter と同値; 回想/伏線用)。
     atomic=False(既定): 逐次適用。1件矛盾しても他はcommitされ得る(部分適用が残る)。
     atomic=True: 1件でも矛盾したらバッチ全体を巻き戻し何も適用しない(中途半端な状態を残さない)。
     返り値: {results:[committed/rejected,...], applied: 適用されたか, (atomicで巻戻時)rolled_back_to_op}。"""

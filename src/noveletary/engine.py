@@ -19,10 +19,16 @@ class Fact:
     subj: str
     attr: str  # LIFE / ACT / LOC / RANK / LEDGER / ALIAS / ORDER ...
     value: Optional[str]
-    t: int  # 物語時間(章)
+    t: int  # valid-time(物語内時間)の開始章。フルーエントは区間 [t, ∞) で保持(Phase B で valid_to を明示化)
     kind: str = "STATE"  # STATE / EVENT / LEDGER_LEVEL / ALIAS / ORDER
     num: Optional[int] = None
     deps: list = field(default_factory=list)
+    narrated_in: Optional[int] = None  # discourse-time(語りの章)。None なら valid-time(t)と同値=順送り
+
+    @property
+    def narrated(self) -> int:
+        """discourse-time(語りの章)。未指定なら valid-time(t)に等しい。"""
+        return self.narrated_in if self.narrated_in is not None else self.t
 
 
 class Question(Exception):

@@ -126,6 +126,7 @@ class Store:
                 p.get("kind", "STATE"),
                 p.get("num"),
                 p.get("deps", []),
+                narrated_in=p.get("narrated_in"),
             )
         elif op_type == "merge_alias":
             kb.aliases[p["from"]] = p["to"]
@@ -134,13 +135,15 @@ class Store:
         elif op_type == "supersede":
             if p["fid"] in kb.facts:
                 o = kb.facts[p["fid"]]
-                kb.facts[p["fid"]] = Fact(o.fid, o.subj, o.attr, p["value"], o.t, o.kind, p.get("num"))
+                kb.facts[p["fid"]] = Fact(
+                    o.fid, o.subj, o.attr, p["value"], o.t, o.kind, p.get("num"), narrated_in=o.narrated_in
+                )
         elif op_type == "delete_fact":
             kb.facts.pop(p["fid"], None)
 
     def _snapshot(self, branch, op_id):
         kb = self.materialize(branch, upto_op=op_id)
-        facts = {fid: (f.subj, f.attr, f.value, f.t, f.kind, f.num) for fid, f in kb.facts.items()}
+        facts = {fid: (f.subj, f.attr, f.value, f.t, f.kind, f.num, f.narrated_in) for fid, f in kb.facts.items()}
         self.db.execute(
             "INSERT OR REPLACE INTO snapshots VALUES(?,?)",
             (
@@ -152,7 +155,11 @@ class Store:
         )
         self.db.commit()
 
-    def materialize(self, branch, as_of_valid=None, upto_op=None):
+    def materialize(self, branch, as_of_valid=None, upto_op=None, as_of_narrated=None):
+        """ブランチ状態を replay で再構成。
+        as_of_valid: valid-time(物語内時間)スライス。「その章時点の世界」。
+        as_of_narrated: discourse-time(語りの章)スライス。「第N章まで読んだ読者が知る事実」。
+        両者は独立軸(bitemporal の布石)。未指定軸はフィルタしない。"""
         head = upto_op if upto_op is not None else self._head(branch)
         if head is None:
             return NarrativeKB()
@@ -164,13 +171,21 @@ class Store:
         kb = NarrativeKB()
         if row:
             snap = json.loads(row[1])
-            for fid, (s, a, v, t, k, nm) in snap["facts"].items():
-                kb.facts[fid] = Fact(fid, s, a, v, t, k, nm)
+            for fid, vals in snap["facts"].items():
+                s, a, v, t, k, nm = vals[:6]  # 旧snapshot(6要素)互換
+                ni = vals[6] if len(vals) > 6 else None  # narrated_in(7要素目)
+                kb.facts[fid] = Fact(fid, s, a, v, t, k, nm, narrated_in=ni)
             kb.aliases = snap["aliases"]
             kb.cannot_link = {frozenset(x) for x in snap["cl"]}
         for oid, parent, op_type, payload, vf, author in delta:
             if as_of_valid is not None and vf is not None and vf > as_of_valid:
                 continue
+            if as_of_narrated is not None:
+                n = json.loads(payload).get("narrated_in")  # 旧op/構造opは欠落→valid_from(vf)で代替
+                if n is None:
+                    n = vf
+                if n is not None and n > as_of_narrated:
+                    continue
             self._apply(kb, op_type, payload, vf)
         kb.constraints = self.materialize_constraints(branch, upto_op)
         return kb
@@ -255,11 +270,23 @@ class Store:
         return {"status": "removed", "cid": cid, "op_id": op, "note": "操作ログは不変(ロールバックで復活可)"}
 
     # ---------------- 構築: add (gate付き) ----------------
-    def add(self, branch, subject, attribute, value, chapter, kind="STATE", num=None, gate=True, author="author"):
+    def add(
+        self,
+        branch,
+        subject,
+        attribute,
+        value,
+        chapter,
+        kind="STATE",
+        num=None,
+        gate=True,
+        author="author",
+        narrated_in=None,
+    ):
         kb = self.materialize(branch)
         fid = self._new_fid()
-        f = Fact(fid, subject, attribute, value, chapter, kind, num)
-        # hard制約検査(影響部分グラフ)
+        f = Fact(fid, subject, attribute, value, chapter, kind, num, narrated_in=narrated_in)
+        # hard制約検査(影響部分グラフ)。検査は valid-time(chapter)基準で行う。
         scope = kb._affected(f)
         viol = kb._check_hard(f, scope)
         if viol and gate:
@@ -267,7 +294,15 @@ class Store:
         op = self._commit(
             branch,
             "add_fact",
-            {"fid": fid, "subj": subject, "attr": attribute, "value": value, "kind": kind, "num": num},
+            {
+                "fid": fid,
+                "subj": subject,
+                "attr": attribute,
+                "value": value,
+                "kind": kind,
+                "num": num,
+                "narrated_in": narrated_in,
+            },
             chapter,
             author,
         )
@@ -301,6 +336,7 @@ class Store:
                 fc.get("num"),
                 gate=gate,
                 author=author,
+                narrated_in=fc.get("narrated_in"),
             )
             results.append(r)
             if r.get("status") == "rejected":
@@ -388,6 +424,7 @@ class Store:
                     "value": fc.get("value"),
                     "kind": fc.get("kind", "STATE"),
                     "num": fc.get("num"),
+                    "narrated_in": fc.get("narrated_in"),
                 },
                 fc["chapter"],
                 author,
@@ -594,8 +631,8 @@ class Store:
         return {"qid": qid, "resolved": answer, "applied": applied}
 
     # ---------------- 読取 ----------------
-    def get_state(self, branch="main", as_of_chapter=None, subject=None):
-        kb = self.materialize(branch, as_of_chapter)
+    def get_state(self, branch="main", as_of_chapter=None, subject=None, as_of_narrated=None):
+        kb = self.materialize(branch, as_of_chapter, as_of_narrated=as_of_narrated)
         fs = sorted(kb.facts.values(), key=lambda x: (x.t, x.fid))
         if subject:
             cs = kb._canon(subject)
@@ -603,6 +640,7 @@ class Store:
         return {
             "branch": branch,
             "as_of_chapter": as_of_chapter,
+            "as_of_narrated": as_of_narrated,
             "aliases": kb.aliases,
             "facts": [
                 {
@@ -610,7 +648,8 @@ class Store:
                     "subject": f.subj,
                     "attribute": f.attr,
                     "value": f.value,
-                    "chapter": f.t,
+                    "chapter": f.t,  # valid-time(物語内時間)の開始章
+                    "narrated_in": f.narrated,  # discourse-time(語りの章); 未指定なら chapter と同値
                     "kind": f.kind,
                     "num": f.num,
                 }

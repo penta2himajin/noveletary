@@ -22,6 +22,43 @@ def test_add_commits_clean(s):
     assert r["status"] == "committed" and r["fid"].startswith("fct_")
 
 
+# ---- Phase A: discourse 軸 narrated_in(語りの章) を valid-time(物語内時間) と分離 ----
+def test_narrated_in_defaults_to_valid_time(s):
+    s.add("main", "ハル", "STATE", "在室", 3)
+    f = s.get_state("main")["facts"][0]
+    assert f["chapter"] == 3 and f["narrated_in"] == 3  # 既定: 語り=物語内時間
+
+
+def test_narrated_in_independent_of_valid_time(s):
+    # 第5章の回想で、物語内時間=第1章の事実を確定
+    s.add("main", "ハル", "STATE", "幼少期に港にいた", 1, narrated_in=5)
+    f = s.get_state("main")["facts"][0]
+    assert f["chapter"] == 1 and f["narrated_in"] == 5
+
+
+def test_as_of_narrated_reader_knowledge_slice(s):
+    # 物語内では1章から真だが、開示は10章(伏線/叙述トリック)
+    s.add("main", "犯人", "STATE", "正体X", 1, narrated_in=10)
+    assert len(s.get_state("main", as_of_chapter=1)["facts"]) == 1  # 世界には第1章から在る
+    assert len(s.get_state("main", as_of_narrated=3)["facts"]) == 0  # 第3章まで読んだ読者は未だ知らない
+    assert len(s.get_state("main", as_of_narrated=10)["facts"]) == 1  # 第10章で開示
+
+
+def test_valid_time_constraints_unchanged_by_narration(s):
+    # 制約は valid-time 基準: narrated_in をずらしても死後行為は弾く(回帰ガード)
+    s.add("main", "X", "LIFE", "dead", 1, narrated_in=2)
+    r = s.add("main", "X", "ACT", "歩く", 3, narrated_in=2, kind="EVENT")
+    assert r["status"] == "rejected"
+
+
+def test_narrated_in_survives_snapshot(s):
+    # スナップショット(25op毎)を跨いでも narrated_in が保持される(6/7要素タプル互換)
+    for i in range(30):
+        s.add("main", f"E{i}", "STATE", "x", 1, narrated_in=7)
+    facts = s.get_state("main")["facts"]
+    assert len(facts) == 30 and all(f["narrated_in"] == 7 for f in facts)
+
+
 def test_assert_alias_merges_unrelated_names(s):
     # 表層が似ていない別名(偽名)を作者が明示統合できる
     s.add("main", "マイケル・コール", "STATE", "相続人", 3)
