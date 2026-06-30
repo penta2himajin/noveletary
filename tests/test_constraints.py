@@ -84,7 +84,9 @@ def test_consistency_detects_orphan_release(s):
 
 
 def test_eager_toggle_attaches_warnings(s):
-    assert "consistency_warnings" not in s.add_constraint("main", "release", {"terminal_attr": "A", "terminal_value": "b"})
+    assert "consistency_warnings" not in s.add_constraint(
+        "main", "release", {"terminal_attr": "A", "terminal_value": "b"}
+    )
     s.set_constraint_check_eager(True)
     r = s.add_constraint("main", "release", {"terminal_attr": "C", "terminal_value": "d"})
     assert any(i["kind"] == "orphan_release" for i in r.get("consistency_warnings", []))

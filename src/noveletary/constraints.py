@@ -203,17 +203,19 @@ def check_consistency(records):
     releases = [r for r in enabled if r["template"] == "release"]
 
     def _match(fb, rel):
-        return (
-            fb["params"]["terminal_attr"] == rel["params"].get("terminal_attr")
-            and fb["params"]["terminal_value"] == rel["params"].get("terminal_value")
-        )
+        return fb["params"]["terminal_attr"] == rel["params"].get("terminal_attr") and fb["params"][
+            "terminal_value"
+        ] == rel["params"].get("terminal_value")
 
     # ③ 対応するforbidの無いrelease(no-op)
     for rel in releases:
         if not any(_match(fb, rel) for fb in forbids):
             p = rel["params"]
             issues.append(
-                {"kind": "orphan_release", "detail": f"{p.get('terminal_attr')}={p.get('terminal_value')} のreleaseに対応forbidが無い(no-op)"}
+                {
+                    "kind": "orphan_release",
+                    "detail": f"{p.get('terminal_attr')}={p.get('terminal_value')} のreleaseに対応forbidが無い(no-op)",
+                }
             )
 
     # ④ 全体release(subject未指定)で常に無効化されるforbid(死蔵)
@@ -223,7 +225,10 @@ def check_consistency(records):
         if any(_match(fb, rel) and rel["params"].get("subject") is None for rel in releases):
             p = fb["params"]
             issues.append(
-                {"kind": "shadowed_forbid", "detail": f"{p['terminal_attr']}={p['terminal_value']} のforbidが全体releaseで常時無効化"}
+                {
+                    "kind": "shadowed_forbid",
+                    "detail": f"{p['terminal_attr']}={p['terminal_value']} のforbidが全体releaseで常時無効化",
+                }
             )
 
     return issues

@@ -224,7 +224,14 @@ class Store:
         if template not in TEMPLATES and template != "release":
             return {"error": f"unknown template '{template}'. choices: {sorted(TEMPLATES) + ['release']}"}
         cid = self._new_cid()
-        rec = {"cid": cid, "template": template, "params": params, "scope": scope or {}, "note": note, "enabled": enabled}
+        rec = {
+            "cid": cid,
+            "template": template,
+            "params": params,
+            "scope": scope or {},
+            "note": note,
+            "enabled": enabled,
+        }
         op = self._commit(branch, "add_constraint", rec, 0)
         out = {"status": "added", "cid": cid, "op_id": op, "constraint": rec}
         if self._eager_cc():  # 設定でeagerなら追加直後に充足性を検査(警告のみ; 作者の自由は妨げない)
