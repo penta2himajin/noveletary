@@ -20,6 +20,30 @@ def _norm(s):
     return re.sub(r"[。、\s（）()]", "", s or "")
 
 
+_ROLE_SUFFIX = ("士", "官", "長", "師", "兵", "将", "帝", "卿", "侯", "伯", "王")
+_DEATH_PRED = ("死ぬ", "死亡", "亡くなる", "逝く", "果てる", "絶命")
+
+
+def _suggest_type(cand, subject_known=False):
+    """記帳補助の物語型“提案”(advisory)。generic抽出は変えず、採用時の精緻化を一目で示す。
+    - 死亡述語 かつ 主語が既知実体 → {attribute: LIFE, value: dead}
+      ※「磁気圏が死にかける」等の比喩/非生物は、主語が既知実体でない+lemmaのブレもあるため出さない安全側。
+    - 「Xの名(前)」主語の状態 → {subject: X, attribute: 呼称}(主客の整形)
+    - 役職接尾(…士/官/長/師…)の状態 → {attribute: RANK}"""
+    subj = cand.get("subject", "") or ""
+    val = cand.get("value", "") or ""
+    is_state = cand.get("kind") == "STATE"
+    pred = val.split(":")[0]  # value は predicate または predicate:loc
+    if pred in _DEATH_PRED and subject_known:
+        return {"attribute": "LIFE", "value": "dead"}
+    m = re.match(r"^(.+?)の(?:名前|名)$", subj)
+    if m and is_state:
+        return {"subject": m.group(1), "attribute": "呼称"}
+    if is_state and any(val.endswith(s) for s in _ROLE_SUFFIX):
+        return {"attribute": "RANK"}
+    return None
+
+
 def triage_candidates(candidates, existing_facts, aliases=None):
     """記帳の下書き候補(records_to_facts 出力)を、採否しやすいよう仕分ける。NLP非依存の純ロジック。
     candidates: [{subject, attribute, value, kind, ...}] / existing_facts: get_state の facts / aliases: 別名表。
@@ -40,6 +64,9 @@ def triage_candidates(candidates, existing_facts, aliases=None):
         is_new = (cs, _norm(c.get("value"))) not in existing_pairs
         signal = "high" if (c.get("kind") == "STATE" or cs in known) else "low"
         item = {**c, "signal": signal, "is_new": is_new}
+        suggest = _suggest_type(c, cs in known)  # 物語型の提案(advisory; 採用時に retag/型付けの手間を省く)
+        if suggest:
+            item["suggest"] = suggest
         if not is_new:
             existing_hits.append(item)
         elif signal == "high":

@@ -88,16 +88,18 @@ def _get_kwja(model_size="base"):
 
 
 _NONCONTENT_POS = ("助詞", "助動詞", "判定詞", "特殊", "補助記号")
+_NAME_JOINERS = ("・", "･", "＝", "=")  # 記号(特殊)だが固有名内の区切りは保持(イオ・チェン)
 
 
 def _content_surface(bp):
     """文節(Phrase)単位の内容表層(複合名詞を保つ)。格助詞/助動詞/判定詞/記号を落として連結。
     KWJAは複合名詞を基本句(基本句)を跨いで分割する(補修/潜水/士)ため、基本句ではなく
-    それを含む文節の全形態素から取る。例:「補修潜水士だ」→「補修潜水士」,「磁気圏は」→「磁気圏」。"""
+    それを含む文節の全形態素から取る。例:「補修潜水士だ」→「補修潜水士」,「磁気圏は」→「磁気圏」。
+    中黒等の固有名区切りは記号でも残す(イオ・チェン→「イオチェン」と潰さない)。"""
     phrase = getattr(bp, "phrase", None)
     morphs = phrase.morphemes if phrase is not None else bp.morphemes
-    s = "".join(m.text for m in morphs if m.pos not in _NONCONTENT_POS)
-    return s or bp.head.lemma
+    s = "".join(m.text for m in morphs if m.pos not in _NONCONTENT_POS or m.text in _NAME_JOINERS)
+    return s.strip("".join(_NAME_JOINERS)) or bp.head.lemma  # 端に紛れた区切りは除去
 
 
 def _np_surface(bp):

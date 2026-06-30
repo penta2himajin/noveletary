@@ -51,6 +51,15 @@ def test_content_surface_keeps_compound_noun():
     assert _content_surface(bp) == "補修潜水士"  # not 「士」
 
 
+def test_content_surface_keeps_name_middledot():
+    # 残差①: 固有名の中黒(記号)を潰さない
+    from noveletary.kwja_extract import _content_surface
+
+    ms = [_M("イオ", "名詞"), _M("・", "特殊"), _M("チェン", "名詞"), _M("は", "助詞")]
+    bp = type("BP", (), {"phrase": _Phrase(ms), "morphemes": ms, "head": _Head("チェン")})()
+    assert _content_surface(bp) == "イオ・チェン"  # not 「イオチェン」
+
+
 def test_np_surface_prepends_genitive_modifier():
     # 属格の連体修飾(「艦長の」)を前置して名詞句を復元
     from noveletary.kwja_extract import _np_surface

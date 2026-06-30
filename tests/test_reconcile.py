@@ -20,6 +20,24 @@ def test_triage_candidates_signal_and_dedup():
     assert r["summary"] == {"high_new": 2, "low_new": 1, "existing": 1}
 
 
+def test_triage_suggests_story_types():
+    # 残差②③: 採用候補に物語型の提案(advisory)が付く。死亡は既知実体に限定(比喩/非生物を避ける)。
+    existing = [{"subject": "モロー", "value": "生存", "attribute": "STATE"}]  # モローは既知実体
+    cands = [
+        {"subject": "イオ", "attribute": "STATE", "value": "補修潜水士", "kind": "STATE"},  # 役職→RANK
+        {"subject": "艦長の名", "attribute": "STATE", "value": "ネモ", "kind": "STATE"},  # Xの名→呼称/主客整形
+        {"subject": "モロー", "attribute": "ACT", "value": "死ぬ", "kind": "EVENT"},  # 既知実体の死→LIFE=dead
+        {"subject": "磁気圏", "attribute": "ACT", "value": "死ぬ", "kind": "EVENT"},  # 未知/非生物→死亡提案しない
+    ]
+    r = triage_candidates(cands, existing)
+    allc = r["high_new"] + r["low_new"]
+    by_subj = {c["subject"]: c for c in allc}
+    assert by_subj["イオ"]["suggest"] == {"attribute": "RANK"}
+    assert by_subj["艦長の名"]["suggest"] == {"subject": "艦長", "attribute": "呼称"}
+    assert by_subj["モロー"]["suggest"] == {"attribute": "LIFE", "value": "dead"}  # 既知実体の死
+    assert "suggest" not in by_subj["磁気圏"]  # 未知/非生物の「死ぬ」は LIFE 提案しない
+
+
 def _recs():
     return [
         {"subject": "モロー", "predicate": "死ぬ", "modality": "event"},
