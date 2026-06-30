@@ -325,6 +325,17 @@ class Store:
         valid_to=None,
     ):
         kb = self.materialize(branch)
+        # ORDER入力検証: 'A<B'(単一'<'・両辺非空)。不正値は _acyclic をクラッシュさせるので構築時に弾く。
+        order_new = None
+        if attribute == "ORDER" and gate:
+            order_new = self._validate_order(kb, value)
+            if order_new is False:
+                return {
+                    "status": "rejected",
+                    "conflict": [
+                        {"type": "MALFORMED_ORDER", "facts": [], "detail": f"ORDER値は 'A<B' 形式が必要: {value!r}"}
+                    ],
+                }
         fid = self._new_fid()
         f = Fact(fid, subject, attribute, value, chapter, kind, num, narrated_in=narrated_in, valid_to=valid_to)
         # hard制約検査(影響部分グラフ)。検査は valid-time(chapter)基準で行う。
@@ -355,7 +366,23 @@ class Store:
             out["soft_violation"] = [{"type": t, "facts": c, "detail": d} for (t, c, d) in viol]
         if q:
             out["question_id"] = q
+        if order_new:  # 新規ORDERトークンを advisory で可視化(タイポによる時系列分断の検知)
+            out["new_order_tokens"] = order_new
         return out
+
+    def _validate_order(self, kb, value):
+        """ORDER値を検証。不正(単一'<'でない/空辺)なら False。正なら[このブランチで未出のトークン]を返す。"""
+        parts = (value or "").split("<")
+        if len(parts) != 2 or not parts[0].strip() or not parts[1].strip():
+            return False
+        a_tok, b_tok = parts[0].strip(), parts[1].strip()
+        known = set()
+        for g in kb.facts.values():
+            if g.attr == "ORDER" and g.value and g.value.count("<") == 1:
+                xa, xb = g.value.split("<")
+                known.add(xa.strip())
+                known.add(xb.strip())
+        return [t for t in (a_tok, b_tok) if t not in known]
 
     def add_many(self, branch, facts, atomic=False, gate=True, author="author"):
         """複数factをまとめて追加。

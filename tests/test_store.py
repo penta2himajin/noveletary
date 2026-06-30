@@ -157,6 +157,33 @@ def test_retag_can_bound_valid_to(s):
     assert locs == []  # 第5章には LOC は無い(死で畳まれた)
 
 
+def test_order_malformed_rejected(s):
+    # ORDER は 'A<B' 形式。'<' が無い/空辺は reject(_acyclic のクラッシュ防止)
+    r = s.add("main", "事件", "ORDER", "AB", 1)
+    assert r["status"] == "rejected" and r["conflict"][0]["type"] == "MALFORMED_ORDER"
+    assert s.add("main", "事件", "ORDER", "A<B<C", 1)["status"] == "rejected"  # '<'が複数も不正
+
+
+def test_order_new_token_surfaced(s):
+    # 新規イベントトークンを advisory で可視化(タイポによる時系列分断の検知)
+    s.add("main", "事件", "ORDER", "来訪<死亡", 1)
+    r = s.add("main", "事件", "ORDER", "死亡<発見", 1)  # 死亡=既知, 発見=新規
+    assert set(r.get("new_order_tokens", [])) == {"発見"}
+
+
+def test_order_typo_surfaces_as_new_token(s):
+    s.add("main", "事件", "ORDER", "死亡<発見", 1)
+    r = s.add("main", "事件", "ORDER", "死亡<発覚", 1)  # 発覚=発見のタイポ → 新規として出る
+    assert "発覚" in r.get("new_order_tokens", [])
+
+
+def test_audit_robust_to_malformed_order_from_import(s):
+    # import は gate しないので不正ORDERが入り得るが、audit(_acyclic)はクラッシュしない
+    s.import_facts("main", [{"subject": "事件", "attribute": "ORDER", "value": "こわれた値", "chapter": 1}])
+    r = s.audit("main")
+    assert "consistent" in r
+
+
 def test_assert_alias_merges_unrelated_names(s):
     # 表層が似ていない別名(偽名)を作者が明示統合できる
     s.add("main", "マイケル・コール", "STATE", "相続人", 3)

@@ -109,7 +109,10 @@ def _acyclic(f, scope, params, releases):
         return vars[x]
 
     for g in orders:
-        a, b = g.value.split("<")
+        parts = (g.value or "").split("<")
+        if len(parts) != 2 or not parts[0].strip() or not parts[1].strip():
+            continue  # 不正なORDER値は辺として扱わない(構築時にgate済; importで混入しても頑健)
+        a, b = parts[0].strip(), parts[1].strip()
         s.assert_and_track(v(a) < v(b), g.fid)
     if s.check() == unsat:
         return [("TEMPORAL_CYCLE", [str(c) for c in s.unsat_core()], f"{oa}に循環")]
