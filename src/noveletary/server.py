@@ -28,6 +28,7 @@ LLMドライバ向けツール設計。想定ワークフロー:
 import os
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 
 from .store import Store
 
@@ -60,30 +61,30 @@ def _get_scorer():
 
 
 # ===================== ブランチ =====================
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), meta={"category": "branch"})
 def list_branches() -> dict:
-    """全ブランチ(物語の版/プロット案)を列挙する。"""
+    """[branch] 全ブランチ(物語の版/プロット案)を列挙する。"""
     return {"branches": store.list_branches()}
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False), meta={"category": "branch"})
 def create_branch(name: str, from_branch: str = "main", at_op: int = None) -> dict:
-    """新しいブランチを作る。並行プロット(A案/B案)やif展開の検討に使う。状態コピーは起きない(ポインタのみ)。
+    """[branch] 新しいブランチを作る。並行プロット(A案/B案)やif展開の検討に使う。状態コピーは起きない(ポインタのみ)。
     from_branch の現在地(または at_op で指定した操作)から分岐する。"""
     return store.create_branch(name, from_branch, at_op)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(destructiveHint=True), meta={"category": "branch"})
 def rollback_branch(branch: str, to_op: int) -> dict:
-    """ブランチを過去の操作IDまで巻き戻す。操作ログは不変なので巻き戻しの巻き戻しも可能。
+    """[branch] ブランチを過去の操作IDまで巻き戻す。操作ログは不変なので巻き戻しの巻き戻しも可能。
     LLMの一連の編集で矛盾が入った時の安全網。"""
     return store.rollback(branch, to_op)
 
 
 # ===================== 読取(書く前に呼ぶ) =====================
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), meta={"category": "read"})
 def get_state(branch: str = "main", as_of_chapter: int = None, subject: str = None, as_of_narrated: int = None) -> dict:
-    """ブランチで現在有効な事実を返す。各factは chapter(=valid-time/物語内時間)と narrated_in(=discourse-time/語りの章)を持つ。
+    """[read] ブランチで現在有効な事実を返す。各factは chapter(=valid-time/物語内時間)と narrated_in(=discourse-time/語りの章)を持つ。
     as_of_chapter: valid-time スライス=「その章時点の世界」(retcon後でも正しい)。
     as_of_narrated: discourse-time スライス=「第N章まで読んだ読者が知っている事実」(伏線/叙述トリックの検証用)。
       両者は独立軸。回想(物語内は過去・語りは後の章)は chapter と narrated_in が食い違う。
@@ -91,51 +92,51 @@ def get_state(branch: str = "main", as_of_chapter: int = None, subject: str = No
     return store.get_state(branch, as_of_chapter, subject, as_of_narrated=as_of_narrated)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), meta={"category": "read"})
 def chapter_brief(branch: str = "main", chapter: int = 1) -> dict:
-    """第N章を書く前に要る正準を1発で束ねる(想起負担の軽減)。返り値:
+    """[read] 第N章を書く前に要る正準を1発で束ねる(想起負担の軽減)。返り値:
     characters(LIFE/RANKを持つ人物の生死alive/地位/位置/呼称) / world(STATEのみの世界・設定) / constraints(有効なhard制約) /
     open_questions(未解決) / open_setups(未回収の伏線; payoff_by超過は overdue) / recent(直近[N-2,N]の行為・順序・生死)。
     執筆ループの先頭で呼ぶと、get_state を何度も引かずに文脈を再構成できる。"""
     return store.chapter_brief(branch, chapter)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False), meta={"category": "outline"})
 def set_beat(branch: str, chapter: int, beat: str) -> dict:
-    """章ビート(その章の設計=1段落: 誰が出て何が起き何が変わり何を仕込む/回収するか)を登録/更新する(アウトライン先行)。
+    """[outline] 章ビート(その章の設計=1段落: 誰が出て何が起き何が変わり何を仕込む/回収するか)を登録/更新する(アウトライン先行)。
     執筆前にビートを置けば、本文生成は『ビートを現在カノンに矛盾せず展開する』低負荷タスクになり、漂流が減る。
     同章への再登録は更新(冪等)。chapter_brief に当該章の beat が同梱される。"""
     return store.set_beat(branch, chapter, beat)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), meta={"category": "outline"})
 def get_outline(branch: str = "main", from_chapter: int = None, to_chapter: int = None) -> dict:
-    """章ビート(プロット骨格)を章順で返す。range 指定可。各部の頭でビートを並べて整合を俯瞰するのに使う。"""
+    """[outline] 章ビート(プロット骨格)を章順で返す。range 指定可。各部の頭でビートを並べて整合を俯瞰するのに使う。"""
     return {"branch": branch, "outline": store.get_outline(branch, from_chapter, to_chapter)}
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False), meta={"category": "outline"})
 def add_setup(branch: str, setup: str, chapter: int, payoff_by: int = None, thread: str = "伏線") -> dict:
-    """伏線(チェーホフの銃)を登録して未回収を追跡する。setup=仕込みの説明, chapter=仕込んだ(語った)章,
+    """[outline] 伏線(チェーホフの銃)を登録して未回収を追跡する。setup=仕込みの説明, chapter=仕込んだ(語った)章,
     payoff_by=回収すべき期限の章(任意; 超過すると chapter_brief/open_setups で overdue 表示), thread=伏線の識別名。
     回収したら resolve_setup で閉じる。100章規模で「張ったが回収し忘れ」を防ぐ台帳。"""
     return store.add_setup(branch, setup, chapter, payoff_by=payoff_by, subject=thread)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(destructiveHint=True), meta={"category": "outline"})
 def resolve_setup(branch: str, fid: str) -> dict:
-    """伏線を回収済みにする(現在の未回収一覧から外す。操作ログは不変なので履歴は残る)。fid は open_setups の値。"""
+    """[outline] 伏線を回収済みにする(現在の未回収一覧から外す。操作ログは不変なので履歴は残る)。fid は open_setups の値。"""
     return store.resolve_setup(branch, fid)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), meta={"category": "read"})
 def get_log(branch: str = "main", limit: int = 50) -> dict:
-    """ブランチの操作履歴(新しい順)。op_id はロールバック先の指定に使える。"""
+    """[read] ブランチの操作履歴(新しい順)。op_id はロールバック先の指定に使える。"""
     return {"branch": branch, "log": store.get_log(branch, limit)}
 
 
 # ===================== 構築(執筆) =====================
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False), meta={"category": "fact"})
 def add_fact(
     branch: str,
     subject: str,
@@ -147,7 +148,7 @@ def add_fact(
     narrated_in: int = None,
     valid_to: int = None,
 ) -> dict:
-    """事実を1件登録(hard制約でgate)。0から執筆する時の基本操作。
+    """[fact] 事実を1件登録(hard制約でgate)。0から執筆する時の基本操作。
     attribute例: LIFE(生死: value=alive/dead) / ACT(行為) / LOC(位置) / RANK(地位) / LEDGER(台帳: numに数値, kind=COUNTER) / ORDER(時間順序: value='A<B') / STATE(一般)。
     chapter は valid-time(物語内時間)の開始章。フルーエントは区間 [chapter, valid_to) で保持。制約検査はこの軸で行う。
     valid_to は valid-time の終了章(排他)。未指定なら +∞(開区間; supersession で暗黙終了)。
@@ -158,15 +159,15 @@ def add_fact(
     別名の疑い(ALIAS質問)は、subject が既存主体と表層的に近い時に自動発火する
     (判定: 文字集合のJaccard類似度 ≥ 0.3)。同一ペアの未解決質問は1つに集約(重複しない)。
     発火すると question_id を返す(list_open_questions→answer_question)。
-    先回りするなら assert_distinct(別人と固定) / assert_alias(同一と固定) を使う。"""
+    先回りするなら link_entities(same=False で別人固定 / same=True で同一固定) を使う。"""
     return store.add(
         branch, subject, attribute, value, chapter, kind, num, gate=True, narrated_in=narrated_in, valid_to=valid_to
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False), meta={"category": "fact"})
 def add_facts(branch: str, facts: list, atomic: bool = False) -> dict:
-    """複数の事実をまとめて登録(各々hard制約でgate)。1シーン分の事実を一括投入する時に。
+    """[fact] 複数の事実をまとめて登録(各々hard制約でgate)。1シーン分の事実を一括投入する時に。
     facts は [{subject, attribute, value, chapter, kind?, num?, narrated_in?, valid_to?}, ...]。
     chapter=valid-time開始(物語内時間), valid_to=valid-time終了(排他, 未指定なら+∞), narrated_in=discourse-time(語りの章, 未指定なら chapter と同値; 回想/伏線用)。
     atomic=False(既定): 逐次適用。1件矛盾しても他はcommitされ得る(部分適用が残る)。
@@ -175,7 +176,7 @@ def add_facts(branch: str, facts: list, atomic: bool = False) -> dict:
     return store.add_many(branch, facts, atomic=atomic, gate=True)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False), meta={"category": "fact"})
 def retag_fact(
     branch: str,
     fid: str,
@@ -186,7 +187,7 @@ def retag_fact(
     value: str = None,
     num: int = None,
 ) -> dict:
-    """既存事実を同じ fid のまま付け替える/更新する(delete+re-add 不要)。指定しない項目(None)は据え置き。
+    """[fact] 既存事実を同じ fid のまま付け替える/更新する(delete+re-add 不要)。指定しない項目(None)は据え置き。
     用途: 値の更新(value/num)、章の移動(chapter)、属性の付け替え(attribute)、生前の経歴/居所を死で畳む(valid_to)、開示章の修正(narrated_in)。
     retcon 同様に hard 再検査が走り、矛盾すれば status=rejected(retag) で適用しない(操作ログは不変なので過去版は履歴に残る)。
     注: valid_to/narrated_in を ∞/既定へ戻すのは不可(rare; delete_fact + add_fact で)。"""
@@ -202,25 +203,25 @@ def retag_fact(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(destructiveHint=True), meta={"category": "fact"})
 def delete_fact(branch: str, fid: str) -> dict:
-    """事実を削除。他factが依存していれば孤児化を防ぐため拒否。"""
+    """[fact] 事実を削除。他factが依存していれば孤児化を防ぐため拒否。"""
     return store.delete(branch, fid)
 
 
 # ===================== 取込(既存作品) =====================
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False), meta={"category": "fact"})
 def import_facts(branch: str, facts: list) -> dict:
-    """既存作品から抽出した事実を一括登録(hard制約でgateしない=矛盾も含め丸ごと読込む)。
+    """[fact] 既存作品から抽出した事実を一括登録(hard制約でgateしない=矛盾も含め丸ごと読込む)。
     取込後に audit を呼ぶと、既存の矛盾が表面化する。0からの執筆ではなく既存原稿の取込に使う。
     facts は [{subject, attribute, value, chapter, kind?, num?}, ...]。"""
     return store.import_facts(branch, facts)
 
 
 # ===================== 検証 =====================
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), meta={"category": "verify"})
 def audit(branch: str = "main", as_of_chapter: int = None, include_soft: bool = False) -> dict:
-    """ブランチ全体を監査する。
+    """[verify] ブランチ全体を監査する。
     hard_violations: 決定論的な矛盾(死後の行為/台帳減少/時間循環など)。確実。
     include_soft=True にすると意味的矛盾(回収↔破壊など)をNLIで検出し open-question を生成(モデル未導入なら自動skip)。
     取込直後の健全性チェックや、章を書いた後の確認に使う。"""
@@ -232,18 +233,18 @@ def audit(branch: str = "main", as_of_chapter: int = None, include_soft: bool = 
 
 
 # ===================== マージ =====================
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False), meta={"category": "branch"})
 def merge_branches(src: str, dst: str) -> dict:
-    """src ブランチを dst へ統合(3-way)。片側のみ変更した事実は自動統合。
+    """[branch] src ブランチを dst へ統合(3-way)。片側のみ変更した事実は自動統合。
     両側が同一事実を別の値にした箇所は競合として作者質問(MERGE_CONFLICT)を生成する。
     競合は answer_question で正史を決める。"""
     return store.merge(src, dst)
 
 
 # ===================== 質問(作者oracleチャネル) =====================
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), meta={"category": "question"})
 def list_open_questions(branch: str = None, status: str = "open") -> dict:
-    """未解決の質問を列挙する。種別と発火条件:
+    """[question] 未解決の質問を列挙する。種別と発火条件:
     - ALIAS(別名同一性): add系で新subjectが既存主体と表層的に近い時(文字集合Jaccard類似度 ≥ 0.3)に自動発火。同一ペアは集約(重複しない)。
     - MERGE_CONFLICT(マージ競合): merge_branches で両ブランチが同一(subj,attr)を別値にした時。
     - SOFT_CONTRADICTION(意味的矛盾の要確認): audit(include_soft=True) のNLIが contradiction 判定した時(モデル未導入ならskip)。
@@ -251,9 +252,9 @@ def list_open_questions(branch: str = None, status: str = "open") -> dict:
     return {"questions": store.list_questions(branch, status)}
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False), meta={"category": "question"})
 def link_entities(branch: str, a: str, b: str, same: bool) -> dict:
-    """2つの呼称の同一性を作者が明示宣言する(ALIAS質問を待たず能動的に)。
+    """[question] 2つの呼称の同一性を作者が明示宣言する(ALIAS質問を待たず能動的に)。
     same=True : a を b の別名として統合(bが正準)。偽名・あだ名・正体判明など「実は同一人物」を一級事実化。
       統合後はエンジンが両者を1実体として検査するので正体レベルの矛盾(故人の行為など)も検出。hard_violations を返す。
     same=False: a と b を別人(別指示対象)として固定(cannot_link)。同姓の別人など。以後この対で ALIAS 質問は出ない。
@@ -261,9 +262,9 @@ def link_entities(branch: str, a: str, b: str, same: bool) -> dict:
     return store.assert_alias(branch, a, b) if same else store.assert_distinct(branch, a, b)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False), meta={"category": "question"})
 def answer_question(qid: int, answer: str) -> dict:
-    """作者の回答で質問を解決し、対応する構築操作を確定する。
+    """[question] 作者の回答で質問を解決し、対応する構築操作を確定する。
     ALIAS: answer='同一'で別名統合 / それ以外で別物(cannot_link)。
     MERGE_CONFLICT: answer='src'/'dst'(または値そのもの)で正史を選択。
     SOFT_CONTRADICTION: 作者の判断を記録(自動操作なし)。
@@ -272,16 +273,16 @@ def answer_question(qid: int, answer: str) -> dict:
 
 
 # ===================== 制約(作品別ルール / 操作ログでversioned) =====================
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), meta={"category": "constraint"})
 def list_constraints(branch: str = "main") -> dict:
-    """ブランチで有効な制約(hard規則)を列挙する。各制約は cid / template / params / enabled / note を持つ。
+    """[constraint] ブランチで有効な制約(hard規則)を列挙する。各制約は cid / template / params / enabled / note を持つ。
     制約はコード直書きでなくデータで、ブランチ単位でversion管理される(分岐で継承・ロールバックで巻戻る)。"""
     return {"branch": branch, "constraints": store.list_constraints(branch)}
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False), meta={"category": "constraint"})
 def add_constraint(branch: str, template: str, params: dict, scope: dict = None, note: str = "") -> dict:
-    """制約を1件追加する(作者の指示でルールを微調整)。template:
+    """[constraint] 制約を1件追加する(作者の指示でルールを微調整)。template:
     - forbid_after_state: 終端状態の後に特定属性を禁止(EC慣性)。params={terminal_attr, terminal_value, forbidden_attrs}。例: 死後の行為禁止。
     - monotone: 数値の単調性。params={attr, direction("nondecreasing"|"nonincreasing")}。例: 台帳の増加。
     - acyclic: 順序の無循環。params={order_attr}。例: 時間順序。
@@ -290,9 +291,9 @@ def add_constraint(branch: str, template: str, params: dict, scope: dict = None,
     return store.add_constraint(branch, template, params, scope, note)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False), meta={"category": "constraint"})
 def set_constraint(branch: str, cid: str, enabled: bool = None, remove: bool = False) -> dict:
-    """制約のライフサイクル操作を1つに集約。remove=True で削除(操作ログは不変なのでロールバックで復活/デフォルトも消せる)。
+    """[constraint] 制約のライフサイクル操作を1つに集約。remove=True で削除(操作ログは不変なのでロールバックで復活/デフォルトも消せる)。
     enabled=False で無効化(一時停止)、enabled=True で再有効化。両方指定時は remove を優先。"""
     if remove:
         return store.remove_constraint(branch, cid)
@@ -301,9 +302,9 @@ def set_constraint(branch: str, cid: str, enabled: bool = None, remove: bool = F
     return store.set_constraint_enabled(branch, cid, enabled)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), meta={"category": "constraint"})
 def check_constraints(branch: str = "main", eager: bool = None) -> dict:
-    """制約セットの構造的な矛盾・無効設定を検査する(遅延/オンデマンド)。
+    """[constraint] 制約セットの構造的な矛盾・無効設定を検査する(遅延/オンデマンド)。
     検出: contradictory_monotone(増減両立) / duplicate(重複) / orphan_release(対応forbid無し) /
     shadowed_forbid(全体releaseで死蔵)。consistent=Trueなら設定上の問題なし。
     eager を渡すと実行モードも切替: True=add_constraint 時に自動検査して警告を添える / False=明示呼びのみ(既定)。"""
@@ -325,9 +326,9 @@ def _build_records(chapter_text, chapter, pov_character=None):
         return ginza_records(chapter_text, chapter, pov_character=pov_character)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), meta={"category": "nlp"})
 def reconcile_facts(chapter: int, llm_facts: list, chapter_text: str, pov_character: str = None) -> dict:
-    """LLMが章から抽出した事実(llm_facts)と、機構が独立抽出した述語-項レコードを(主語,述語)軸で突き合わせる。
+    """[nlp] LLMが章から抽出した事実(llm_facts)と、機構が独立抽出した述語-項レコードを(主語,述語)軸で突き合わせる。
     llm_facts は [{subject, predicate}, ...]。
     返り値: agreement(一致=確証) / llm_only_check_grounding(本文に根拠が薄い=捏造の疑い) /
     mechanism_only_state_possible_omission(状態の申告漏れ・高シグナル) /
@@ -409,9 +410,9 @@ def ensure_nlp(verbose: bool = True) -> bool:
     return ok
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), meta={"category": "nlp"})
 def propose_canon_facts(branch: str, chapter_text: str, chapter: int, pov_character: str = None) -> dict:
-    """章の散文から記帳の下書きを生成する(記帳自動化)。機構抽出(KWJA優先/GiNZA退避)→正準スキーマへ写像
+    """[nlp] 章の散文から記帳の下書きを生成する(記帳自動化)。機構抽出(KWJA優先/GiNZA退避)→正準スキーマへ写像
     →既存カノンと差分→採否しやすく仕分けて返す。**コミットしない**(候補)。
     返り値: high_new(状態/既知実体の行為=採用候補) / low_new(未知主語の瑣末行為=要確認) / existing(既出=除外) / summary。
     使い方: high_new を確認・取捨して add_facts(atomic) で確定。本文を書いた直後に呼べば記帳の二重労働が消える。
