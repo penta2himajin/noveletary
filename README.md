@@ -19,7 +19,7 @@ LLM-driven consistency checking is wasteful and unreliable when the LLM both wri
 
 ## Status
 
-Early (v0.1). Core engine, store, branching, merge, audit, and MCP server are implemented and tested. The Japanese NLP extraction layer (GiNZA reconciliation; KWJA zero-anaphora adapter) is optional and advisory; the KWJA path awaits its upstream model host. Not yet deployed remotely (Cloudflare Workers + D1 is a known migration path).
+Early (v0.1). Core engine, store, tri-temporal facts (valid interval / discourse / transaction), branching, merge, audit, outline beats + foreshadow ledger, and the MCP server are implemented and tested. The Japanese NLP extraction layer (KWJA zero-anaphora + full noun-phrase reconstruction, GiNZA fallback) is the standard path but stays advisory — `propose_canon_facts` drafts canon from prose for author curation; it never gates. KWJA needs Python < 3.14 and self-seeds its checkpoint cache on first use. Not yet deployed remotely (Cloudflare Workers + D1 is a known migration path).
 
 ## Install
 
@@ -39,16 +39,24 @@ SQLite state persists in `data/narrative.db` (run from the repo root; override w
 
 ## Tools (LLM-facing)
 
-| Tool | Purpose |
-|---|---|
-| `get_state` / `get_log` | state before writing (chapter-sliced, subject-focused), history |
-| `add_fact` / `add_facts` | register facts (hard-gated) — writing from scratch |
-| `import_facts` | bulk-load an existing work (not gated) — then `audit` surfaces issues |
-| `update_fact` / `delete_fact` | supersession (+retcon check) / delete (orphan check) |
-| `audit` | hard violations always; `include_soft=True` adds NLI-based author questions |
-| `create_branch` / `merge_branches` / `rollback_branch` | parallel drafts, structural merge, non-destructive rollback |
-| `list_open_questions` / `answer_question` | the author-oracle channel |
-| `extract_facts` / `reconcile_facts` | independent prose extraction; cross-check the LLM's self-report |
+Facts are **tri-temporal**: `chapter` is valid-time as an interval `[chapter, valid_to)` (when a
+fact is true in the story), `narrated_in` is discourse-time (which chapter reveals it — for
+foreshadowing / flashbacks), and the op-log is transaction-time. Each tool's description is
+prefixed with its category and carries read-only / destructive annotations.
+
+| Category | Tools | Purpose |
+|---|---|---|
+| **read** | `get_state`, `chapter_brief`, `get_log` | state before writing (valid- or discourse-time sliced); `chapter_brief` bundles characters / world / constraints / open questions / open foreshadow / recent + the chapter beat in one call |
+| **fact** | `add_fact`, `add_facts`, `retag_fact`, `delete_fact`, `import_facts` | register facts (hard-gated, atomic batches) / move-or-relabel in place / delete (orphan check) / bulk-load an existing work (ungated → `audit`) |
+| **branch** | `create_branch`, `delete_branch`, `rollback_branch`, `merge_branches`, `list_branches` | parallel drafts, structural merge, non-destructive rollback, cleanup |
+| **constraint** | `list_constraints`, `add_constraint`, `set_constraint`, `check_constraints` | work-specific hard rules as data, versioned per branch |
+| **question** | `list_open_questions`, `answer_question`, `link_entities` | the author-oracle channel; `link_entities` declares two names same/distinct |
+| **verify** | `audit` | hard violations always; `include_soft=True` adds NLI-based author questions |
+| **outline** | `set_beat`, `get_outline`, `add_setup`, `resolve_setup` | outline-first beats and a Chekhov ledger (foreshadow with overdue tracking) |
+| **nlp** | `reconcile_facts`, `propose_canon_facts` | mechanism prose extraction — draft canon facts from a chapter, or cross-check the LLM's self-report |
+
+To drive the tools from unattended agents / Claude Code subagents, allowlist the whole server
+(`mcp__noveletary`) rather than individual tools — see `AGENTS.md`.
 
 ## License
 

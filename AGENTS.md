@@ -50,12 +50,24 @@ NLP extraction is the **standard** path: on startup `noveletary-mcp` checks for 
 stack and auto-installs the `nlp` extra if missing (pip output goes to stderr so the stdio
 protocol stays clean). Disable with `NOVELETARY_NLP_AUTOSETUP=0`. KWJA requires
 **Python < 3.14**; on 3.14+ the auto-setup of KWJA fails and extraction falls back to GiNZA
-(degraded) — use a 3.12/3.13 interpreter for the full stack. KWJA/transformer models
-download lazily from their hosts on first extraction, not at install time.
+(degraded) — use a 3.12/3.13 interpreter for the full stack. KWJA checkpoints are seeded on
+first extraction by `kwja_extract.ensure_kwja_cache` (certifi → curl fallback), which works
+around the Kyoto host shipping an incomplete cert chain that OpenSSL-based Python can't verify;
+transformer models still download lazily from HuggingFace on first use.
 
 The DB at `data/narrative.db` (override with `NARRATIVE_DB`) is created on first launch and
 seeded with the **initial values**: the deletable default constraints (forbid-after-state /
 monotone ledger / acyclic order). It is a generated artifact — not committed (see Prohibitions).
+
+**Driving noveletary from agents.** Tools carry a `[category]` prefix in their description
+(branch / read / fact / constraint / outline / question / verify / nlp) plus read-only /
+destructive annotations. To let Claude Code **subagents** (or any unattended agent) call the
+tools without stalling on approval prompts, allowlist the **whole server** — add
+`mcp__noveletary` to `permissions.allow` in `.claude/settings.local.json`. Do **not** list
+tools individually: the surface is consolidated over time and per-tool entries go stale
+(observed: subagents blocked mid-run on unlisted `set_beat`/`chapter_brief`). Failure-recovery
+patterns live in the tools themselves — a rejected write's `conflict` detail carries the fix
+(e.g. "put the fact before the death chapter or fold it with `valid_to`").
 
 ## Development Principles
 
