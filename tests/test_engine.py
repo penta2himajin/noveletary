@@ -19,6 +19,19 @@ def test_use_after_free_detected():
     assert any(t == "FORBID_AFTER_STATE" for (t, _c, _d) in viol)
 
 
+def test_forbid_after_state_detail_has_recovery_hint():
+    # rejected の conflict メッセージに point-of-use の回収ヒントが載る
+    kb = _kb(Fact("d", "被害者", "LIFE", "dead", 1))
+    # 位置(LOC)=生前に畳めば解消、のヒント
+    loc = kb._check_hard(Fact("l", "被害者", "LOC", "工房", 1), kb._affected(Fact("l", "被害者", "LOC", "工房", 1)))
+    assert any("valid_to" in d for (t, _c, d) in loc if t == "FORBID_AFTER_STATE")
+    # 行為(ACT)=死者は行動できない、のヒント
+    act = kb._check_hard(
+        Fact("a", "被害者", "ACT", "歩く", 2, "EVENT"), kb._affected(Fact("a", "被害者", "ACT", "歩く", 2))
+    )
+    assert any("死者は行動できない" in d for (t, _c, d) in act if t == "FORBID_AFTER_STATE")
+
+
 def test_living_action_ok():
     kb = _kb(Fact("l", "ハル", "LIFE", "alive", 1))
     f = Fact("a", "ハル", "ACT", "出航", 6, "EVENT")

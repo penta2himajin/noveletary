@@ -55,7 +55,8 @@ def _forbid_after_state(f, scope, params, releases):
                 (
                     "FORBID_AFTER_STATE",
                     [g.fid for g in terminals if g.t == td] + [f.fid],
-                    f"{f.subj}: ch{td}で{ta}={tv} の後 ch{f.t} に「{f.attr}={f.value}」(終了フルーエントの再開始)",
+                    f"{f.subj}: ch{td}で{ta}={tv} の後 ch{f.t} に「{f.attr}={f.value}」(終了フルーエントの再開始)"
+                    + _after_state_hint(f.attr, td),
                 )
             )
     # 逆: 終端状態を後から挿入しても、既存の未来の禁止行為があれば矛盾
@@ -66,10 +67,18 @@ def _forbid_after_state(f, scope, params, releases):
                 (
                     "FORBID_AFTER_STATE",
                     [f.fid] + [g.fid for g in future],
-                    f"{f.subj}: ch{f.t}で{ta}={tv} だが ch{future[0].t} に既存の「{future[0].attr}」",
+                    f"{f.subj}: ch{f.t}で{ta}={tv} だが ch{future[0].t} に既存の「{future[0].attr}」"
+                    + _after_state_hint(future[0].attr, f.t),
                 )
             )
     return viol
+
+
+def _after_state_hint(attr, death_ch):
+    """rejected を受けた時の回収パターン(point-of-use)。行為は誤り、経歴/位置は生前に畳めば解消。"""
+    if attr == "ACT":
+        return "｜対処: 死者は行動できない=物語側を見直す(死亡章/対象が誤りかも)"
+    return f"｜対処: 生前の事実なら chapter を死亡章({death_ch})より前にするか valid_to={death_ch} で死に畳む(例: 発見時に死んでいる被害者の居所)"
 
 
 def _monotone(f, scope, params, releases):

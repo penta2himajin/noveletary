@@ -160,6 +160,7 @@ def add_fact(
     chapter は valid-time(物語内時間)の開始章。フルーエントは区間 [chapter, valid_to) で保持。制約検査はこの軸で行う。
     valid_to は valid-time の終了章(排他)。未指定なら +∞(開区間; supersession で暗黙終了)。
       生前の経歴/居所を死で畳む等に使う。例: LOC=工房 chapter=0 valid_to=1(第1章の死で終了→以後は不可視・死後行為と衝突しない)。
+      発見時に死んでいる被害者の居所もこのパターン(死亡章に LOC を置くと死後扱いで弾かれる→生前章に置くか valid_to=死亡章)。
     narrated_in は discourse-time(語りの章)=原稿のどの章で開示されるか。未指定なら chapter と同値(順送り)。
       回想/倒叙で「物語内は過去・語りは後」を表す。例: chapter=1, narrated_in=10(第10章で明かす第1章の真実)。
     矛盾(死後の行為・台帳の減少・時間循環等)があれば status=rejected と矛盾fact集合を返す。
