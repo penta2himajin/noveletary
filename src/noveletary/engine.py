@@ -12,6 +12,65 @@ from typing import Optional
 
 from . import constraints as _constraints
 
+# 別名候補判定で共有されても同一性の弱いタイトル/前置詞/助詞語(主に英字名の誤発火抑制用)
+_NAME_STOPWORDS = frozenset(
+    {
+        "the",
+        "of",
+        "a",
+        "an",
+        "de",
+        "la",
+        "le",
+        "du",
+        "von",
+        "van",
+        "der",
+        "den",
+        "el",
+        "al",
+        "lord",
+        "lady",
+        "king",
+        "queen",
+        "prince",
+        "princess",
+        "duke",
+        "duchess",
+        "earl",
+        "baron",
+        "sir",
+        "dame",
+        "general",
+        "captain",
+        "commander",
+        "master",
+        "mistress",
+        "saint",
+        "st",
+        "dr",
+        "mr",
+        "mrs",
+        "ms",
+        "the",
+    }
+)
+
+
+def surface_similar(a, b):
+    """2つの呼称が同一指示対象“候補”か(表層のみ・言語非依存に頑健化)。
+    複数語(空白区切り。英字名に多い)は、タイトル/前置詞を除いた共有トークン(語)があれば候補。
+      → 「King Aldric」と「General Kessik」は共有語なし=非候補(小さいラテン字母での偶然一致を排除)。
+      → 「King Aldric」と「Aldric the Bold」は "aldric" 共有=候補。
+    単一語(日本語名や「イオ・チェン」等、空白なし)は従来の文字集合Jaccard≥0.3(漢字/仮名の共有を捉える)。"""
+    ta, tb = (a or "").split(), (b or "").split()
+    if len(ta) > 1 or len(tb) > 1:
+        sa = {t.lower() for t in ta if len(t) >= 2 and t.lower() not in _NAME_STOPWORDS}
+        sb = {t.lower() for t in tb if len(t) >= 2 and t.lower() not in _NAME_STOPWORDS}
+        return bool(sa & sb)
+    A, B = set(a or ""), set(b or "")
+    return (len(A & B) / len(A | B) if (A | B) else 0) >= 0.3
+
 
 @dataclass
 class Fact:
@@ -91,9 +150,7 @@ class NarrativeKB:
         return qs
 
     def _similar(self, a, b):
-        # 文字集合Jaccard(漢字共有を捉える)
-        A, B = set(a), set(b)
-        return (len(A & B) / len(A | B) if (A | B) else 0) >= 0.3
+        return surface_similar(a, b)
 
     # ---------- mutation API ----------
     def add(self, f: Fact, author=None):

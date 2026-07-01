@@ -41,6 +41,24 @@ def test_location_after_death_still_forbidden():
     assert any(t == "FORBID_AFTER_STATE" for (t, _c, _d) in viol)
 
 
+def test_surface_similar_latin_names():
+    # ラテン字母は字母が小さく偶然一致しやすい → 共有トークン(タイトル除く)で判定
+    from noveletary.engine import surface_similar
+
+    assert surface_similar("King Aldric", "General Kessik") is False  # 共有語なし=別人
+    assert surface_similar("King Aldric", "King Bertram") is False  # 共有はタイトルのみ
+    assert surface_similar("King Aldric", "Aldric the Bold") is True  # 名前(Aldric)を共有
+
+
+def test_surface_similar_japanese_preserved():
+    # 日本語名(空白なし)は従来の文字集合Jaccard≥0.3を維持
+    from noveletary.engine import surface_similar
+
+    assert surface_similar("マイケル・コール", "セバスチャン・コール") is True  # 「コール」共有
+    assert surface_similar("ホームズ", "シャーロック・ホームズ") is True
+    assert surface_similar("イオ", "モロー") is False
+
+
 def test_monotone_counter_break():
     kb = _kb(Fact("c1", "死者帳", "LEDGER", "私的", 1, "COUNTER", num=11))
     f = Fact("c2", "死者帳", "LEDGER", "私的", 10, "COUNTER", num=9)

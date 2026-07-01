@@ -116,6 +116,24 @@ def test_snapshot_does_not_leak_across_branches(s):
     assert subs == {"唯一"}  # A の 30 fact が混入しないこと
 
 
+def test_alias_ignores_outline_metadata(s):
+    # BEAT/SETUP(chN/伏線)はアウトラインmetadataでALIAS検出に参加しない(ストレステストの誤発火源)
+    s.set_beat("main", 1, "章1の設計")
+    s.set_beat("main", 11, "章11の設計")  # ch1 と文字近いが BEAT 同士でALIASしない
+    r = s.add("main", "ch1侍", "RANK", "武士", 2)  # 実体だが BEAT 主語 ch1/ch11 とは照合しない
+    assert "question_id" not in r
+    r2 = s.add("main", "セバスチャンの伏線メモ", "SETUP", "x", 1)  # SETUP追加側もALIASを出さない
+    assert "question_id" not in r2
+    assert [q for q in s.list_questions("main") if q["type"] == "ALIAS"] == []
+
+
+def test_alias_latin_names_no_false_fire(s):
+    # ラテン名の別人が偶然の字母一致でALIAS誤発火しない(fantasy枝の93件の主因)
+    s.add("main", "King Aldric", "RANK", "king", 1)
+    r = s.add("main", "General Kessik", "RANK", "general", 2)
+    assert "question_id" not in r
+
+
 def test_alias_question_deduped(s):
     # 同一ペアの open ALIAS 質問は重複生成しない(同じ主体の fact を複数足しても1つ)
     s.add("main", "セバスチャン・コール", "RANK", "時計師", 0)

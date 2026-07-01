@@ -17,7 +17,9 @@ import sqlite3
 import uuid
 
 from .constraints import TEMPLATES, check_consistency, default_constraints
-from .engine import Fact, NarrativeKB
+from .engine import Fact, NarrativeKB, surface_similar
+
+_METADATA_ATTRS = {"BEAT", "SETUP"}  # アウトライン/伏線台帳=物語実体でない → ALIAS検出の対象外
 
 
 class Store:
@@ -359,8 +361,8 @@ class Store:
             chapter,
             author,
         )
-        # ソフト: 別名曖昧 → 質問を永続化
-        q = self._alias_question(branch, kb, subject)
+        # ソフト: 別名曖昧 → 質問を永続化(アウトライン metadata(BEAT/SETUP)はALIAS対象外)
+        q = None if attribute in _METADATA_ATTRS else self._alias_question(branch, kb, subject)
         out = {"status": "committed", "fid": fid, "op_id": op}
         if viol and not gate:
             out["soft_violation"] = [{"type": t, "facts": c, "detail": d} for (t, c, d) in viol]
@@ -444,6 +446,8 @@ class Store:
     def _alias_question(self, branch, kb, subject):
         cs = kb._canon(subject)
         for g in kb.facts.values():
+            if g.attr in _METADATA_ATTRS:  # BEAT/SETUP の主語(chN/伏線)は実体でない → 照合しない
+                continue
             gs = kb._canon(g.subj)
             if gs != cs and self._similar(cs, gs) and frozenset((cs, gs)) not in kb.cannot_link:
                 dup = self._open_alias_qid(branch, cs, gs)  # 同一ペアの未解決質問があれば再利用(重複生成しない)
@@ -466,8 +470,7 @@ class Store:
         return None
 
     def _similar(self, a, b):
-        A, B = set(a), set(b)
-        return (len(A & B) / len(A | B) if (A | B) else 0) >= 0.3
+        return surface_similar(a, b)
 
     def update(self, branch, fid, new_value, num=None, author="author"):
         kb = self.materialize(branch)
