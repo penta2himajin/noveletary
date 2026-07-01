@@ -90,6 +90,20 @@ class Store:
         self._insert_branch(name, head, head)
         return {"created": name, "forked_from_op": head}
 
+    def delete_branch(self, name):
+        """ブランチを削除する。操作ログ(operations)は不変(append-only)なので残し、
+        ブランチのポインタ・未解決質問・スナップショット(派生キャッシュ)のみ削除する。main は不可。"""
+        if name == "main":
+            return {"error": "main は削除できません"}
+        bid = self._branch_id(name)
+        if bid is None:
+            return {"error": f"branch '{name}' not found"}
+        self.db.execute("DELETE FROM branches WHERE name=?", (name,))
+        self.db.execute("DELETE FROM open_questions WHERE branch=?", (name,))
+        self.db.execute("DELETE FROM snapshots WHERE branch_id=?", (bid,))
+        self.db.commit()
+        return {"status": "deleted", "branch": name, "note": "操作ログは不変なので残す(孤児化を許容)"}
+
     # ---------------- operations ----------------
     def _commit(self, branch, op_type, payload, valid_from, author="author"):
         ts = self._tick()

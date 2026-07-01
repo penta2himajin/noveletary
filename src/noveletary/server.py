@@ -75,6 +75,13 @@ def create_branch(name: str, from_branch: str = "main", at_op: int = None) -> di
 
 
 @mcp.tool(annotations=ToolAnnotations(destructiveHint=True), meta={"category": "branch"})
+def delete_branch(name: str) -> dict:
+    """[branch] ブランチを削除する(不要になった実験/デモ枝の掃除)。操作ログは不変なので残り、
+    ポインタ・未解決質問・スナップショット(派生キャッシュ)のみ消える。main は削除不可。"""
+    return store.delete_branch(name)
+
+
+@mcp.tool(annotations=ToolAnnotations(destructiveHint=True), meta={"category": "branch"})
 def rollback_branch(branch: str, to_op: int) -> dict:
     """[branch] ブランチを過去の操作IDまで巻き戻す。操作ログは不変なので巻き戻しの巻き戻しも可能。
     LLMの一連の編集で矛盾が入った時の安全網。"""

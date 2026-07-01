@@ -105,6 +105,20 @@ def test_as_of_chapter_respects_snapshot(s):
     assert s.get_state("main", as_of_chapter=10)["facts"] == []  # 第10章時点には未だ無い
 
 
+def test_delete_branch(s):
+    s.create_branch("tmp", "main")
+    s.add("tmp", "X", "STATE", "y", 1)
+    s.add("tmp", "セバスチャン・コール", "RANK", "職人", 0)
+    s.add("tmp", "マイケル・コール", "STATE", "甥", 3)  # ALIAS質問を生む
+    assert "tmp" in [b["name"] for b in s.list_branches()]
+    r = s.delete_branch("tmp")
+    assert r["status"] == "deleted"
+    assert "tmp" not in [b["name"] for b in s.list_branches()]
+    assert s.list_questions("tmp") == []  # 質問キャッシュも消える
+    assert "error" in s.delete_branch("main")  # main は削除不可
+    assert "error" in s.delete_branch("tmp")  # 二重削除は not found
+
+
 def test_snapshot_does_not_leak_across_branches(s):
     # スナップショットはグローバルop_idで保存されるが、ブランチ境界を越えて混入してはならない
     s.create_branch("A", "main")
