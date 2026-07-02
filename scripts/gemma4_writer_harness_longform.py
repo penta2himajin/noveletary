@@ -167,6 +167,18 @@ def summarize_chapter(llm: Llama, chapter: int, text: str) -> str:
     return out["choices"][0]["text"].strip()
 
 
+def tail_at_sentence_boundary(text: str, max_chars: int) -> str:
+    """末尾max_chars文字に切り詰めるが、文の途中(「五年前」の「五」だけ落ちる、等)から
+    始まらないよう、切り詰め窓の中で最初に見つかる文境界の直後まで前方に寄せる。"""
+    if len(text) <= max_chars:
+        return text
+    window = text[-max_chars:]
+    for i, ch in enumerate(window):
+        if ch in "。！？\n":
+            return window[i + 1 :].lstrip()
+    return window  # 境界が窓内に見つからなければそのまま(まれ)
+
+
 def new_session_prompt(
     llm: Llama,
     store: Store,
@@ -195,9 +207,10 @@ def new_session_prompt(
     )
     if chapter_buffer.strip():
         user_text = f"上記を踏まえ、以下に示す書きかけの第{chapter}章の続きをそのまま書いてください。"
-        return render_system(extra_system) + render_user(user_text) + "<|turn>model\n" + chapter_buffer[-recap_chars:]
+        tail = tail_at_sentence_boundary(chapter_buffer, recap_chars)
+        return render_system(extra_system) + render_user(user_text) + "<|turn>model\n" + tail
 
-    recap = "".join(manuscript)[-recap_chars:] if manuscript else ""
+    recap = tail_at_sentence_boundary("".join(manuscript), recap_chars) if manuscript else ""
     extra_system += f"\n\n直近原稿(前章末尾)の抜粋:\n{recap}"
     user_text = f"上記の続きとして、第{chapter}章を書いてください。"
     return render_system(extra_system) + render_user(user_text) + "<|turn>model\n"
