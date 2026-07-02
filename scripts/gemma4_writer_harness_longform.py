@@ -170,10 +170,25 @@ def main():
     ap.add_argument("--db", default="/tmp/gemma4_novel_longform.db")
     ap.add_argument("--out", default="/tmp/gemma4_novel_longform.txt")
     ap.add_argument("--transcript-out", default="/tmp/gemma4_novel_longform_transcript.txt")
+    ap.add_argument("--n-threads", type=int, default=4)
+    ap.add_argument(
+        "--dump-compaction-dir",
+        default=None,
+        help="set to dump the verbatim pre/post-compaction transcript text to files in this dir (debugging aid)",
+    )
+    ap.add_argument(
+        "--stop-after-compactions",
+        type=int,
+        default=None,
+        help="exit right after this many compaction events have been observed (fast repro of the compaction path)",
+    )
     a = ap.parse_args()
 
+    if a.dump_compaction_dir:
+        Path(a.dump_compaction_dir).mkdir(parents=True, exist_ok=True)
+
     print(f"loading model: {a.model_path} (n_ctx={a.n_ctx})", file=sys.stderr)
-    llm = Llama(model_path=a.model_path, n_ctx=a.n_ctx, n_threads=4, n_gpu_layers=0, verbose=False)
+    llm = Llama(model_path=a.model_path, n_ctx=a.n_ctx, n_threads=a.n_threads, n_gpu_layers=0, verbose=False)
 
     Path(a.db).unlink(missing_ok=True)
     store = Store(a.db)
@@ -206,9 +221,21 @@ def main():
                 f"re-grounding via chapter_brief(chapter={chapter})",
                 file=sys.stderr,
             )
+            if a.dump_compaction_dir:
+                n = len(compaction_log)
+                Path(a.dump_compaction_dir, f"compaction_{n:02d}_pre.txt").write_text(transcript, encoding="utf-8")
             transcript = new_session_prompt(llm, store, chapter, manuscript, recap_chars=600)
             tc = token_count(llm, transcript)
             print(f"[compaction] rebuilt transcript = {tc} tok", file=sys.stderr)
+            if a.dump_compaction_dir:
+                n = len(compaction_log)
+                Path(a.dump_compaction_dir, f"compaction_{n:02d}_post.txt").write_text(transcript, encoding="utf-8")
+            if a.stop_after_compactions and len(compaction_log) >= a.stop_after_compactions:
+                print(
+                    f"[compaction] reached --stop-after-compactions={a.stop_after_compactions}, exiting early",
+                    file=sys.stderr,
+                )
+                break
 
         print(
             f"\n=== round {round_i} (chapter {chapter}, transcript={tc} tok, "
