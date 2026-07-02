@@ -173,22 +173,32 @@ def new_session_prompt(
     chapter: int,
     manuscript: list[str],
     chapter_summaries: list[str],
+    chapter_buffer: str,
     recap_chars: int,
 ) -> str:
     """compaction: 会話履歴を捨て、(要約=長期soft記憶, 抜粋=直近の文体soft記憶,
-    chapter_brief=hard正準)の3層で土台を作り直す。"""
+    chapter_brief=hard正準)の3層で土台を作り直す。
+
+    chapter_buffer(現在の章で、まだ <<CHAPTER_END>> を出す前に書かれた地の文)が
+    非空の場合は「章の途中でcompactionが発火した」ケース: その書きかけの本文をそのまま
+    モデルの手番の続きとして与え、そのまま生成を継続させる(章を書き直す指示を出すと、
+    モデルが既に書いた分を知らずに似た内容を再度書いてしまうため)。"""
     brief = store.chapter_brief(BRANCH, chapter)
-    recap = "".join(manuscript)[-recap_chars:] if manuscript else ""
     summary_block = "\n".join(chapter_summaries) if chapter_summaries else "(まだなし)"
     extra_system = (
-        f"(セッション再構築: これまでの章のローリング要約・直近原稿の抜粋・第{chapter}章時点の"
-        "正準情報を以下に与える。要約と抜粋は文体とおおまかな流れを思い出すための手がかりに過ぎない"
-        "(不正確な場合がある)。正準情報は矛盾しないための唯一の権威であり、食い違う場合は正準情報を"
-        "優先すること。これらを土台に矛盾なく続きを書くこと。)\n"
+        f"(セッション再構築: これまでの章のローリング要約・第{chapter}章時点の正準情報を以下に与える。"
+        "要約は文体とおおまかな流れを思い出すための手がかりに過ぎない(不正確な場合がある)。"
+        "正準情報は矛盾しないための唯一の権威であり、食い違う場合は正準情報を優先すること。"
+        "これらを土台に矛盾なく続きを書くこと。)\n"
         f"これまでの章のローリング要約:\n{summary_block}\n\n"
-        f"直近原稿の抜粋:\n{recap}\n\n"
         f"第{chapter}章時点の正準情報(chapter_brief結果):\n{json.dumps(brief, ensure_ascii=False)}"
     )
+    if chapter_buffer.strip():
+        user_text = f"上記を踏まえ、以下に示す書きかけの第{chapter}章の続きをそのまま書いてください。"
+        return render_system(extra_system) + render_user(user_text) + "<|turn>model\n" + chapter_buffer[-recap_chars:]
+
+    recap = "".join(manuscript)[-recap_chars:] if manuscript else ""
+    extra_system += f"\n\n直近原稿(前章末尾)の抜粋:\n{recap}"
     user_text = f"上記の続きとして、第{chapter}章を書いてください。"
     return render_system(extra_system) + render_user(user_text) + "<|turn>model\n"
 
@@ -270,7 +280,9 @@ def main():
             if a.dump_compaction_dir:
                 n = len(compaction_log)
                 Path(a.dump_compaction_dir, f"compaction_{n:02d}_pre.txt").write_text(transcript, encoding="utf-8")
-            transcript = new_session_prompt(llm, store, chapter, manuscript, chapter_summaries, recap_chars=600)
+            transcript = new_session_prompt(
+                llm, store, chapter, manuscript, chapter_summaries, chapter_buffer, recap_chars=600
+            )
             tc = token_count(llm, transcript)
             print(f"[compaction] rebuilt transcript = {tc} tok", file=sys.stderr)
             if a.dump_compaction_dir:
